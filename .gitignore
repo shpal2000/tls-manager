@@ -1,0 +1,6 @@
+*.pyc
+*.db
+
+build/
+admin/__pycache__/
+admin/.pytest_cache__/
