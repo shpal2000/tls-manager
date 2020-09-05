@@ -5,6 +5,8 @@ import sys
 import argparse
 import json
 import time
+from threading import Thread
+from multiprocessing import Process
 import pdb
 
 def add_c_arguments (arg_parser):
@@ -18,6 +20,11 @@ def add_c_arguments (arg_parser):
                                 , default='/root/rundir'
                                 , help = 'host_run_dir')
 
+    arg_parser.add_argument('--run_tag'
+                                , action="store"
+                                , default='latest'
+                                , help = 'run_tag')
+
 
 def get_arguments ():
     arg_parser = argparse.ArgumentParser(description = 'commands')
@@ -30,10 +37,7 @@ def get_arguments ():
 
     # start arguments
     add_c_arguments (start_parser)
-    start_parser.add_argument('--run_tag'
-                                , action="store"
-                                , default='latest'
-                                , help = 'run_tag')
+
 
     arg_parser.add_argument('--target_run_dir'
                                 , action="store"
@@ -61,8 +65,45 @@ def get_arguments ():
     return arg_parser.parse_args()
 
 
+def zone_start_thread(host_info, c_args, zone, z_index):
 
-def start_traffic(c_args):
+    zone_cname = "tp-zone-{}".format (z_index+1)
+    cmd_str = "sudo docker exec -d {} ip netns add {}".format(zone_cname, host_info['netns'])
+    os.system (cmd_str)
+
+    for netdev in host_info['net_iface_map'].values():
+        cmd_str = "sudo docker exec -d {} ip link set dev {} netns {}".format(zone_cname,
+                                                                netdev,
+                                                                host_info['netns'])
+        os.system (cmd_str)
+
+    cmd_str = "sudo docker exec -d {} cp -f /rundir/bin/tlspack.exe /usr/local/bin".format(zone_cname)
+    os.system (cmd_str)
+
+    cmd_str = "sudo docker exec -d {} cp -f /rundir/bin/tlspack.py /usr/local/bin".format(zone_cname)
+    os.system (cmd_str)
+
+
+    cmd_ctrl_dir = os.path.join(c_args.target_run_dir, 'traffic', c_args.cfg_name, 'cmd_ctrl', zone['zone_label'])
+
+    start_cmd_internal = '"ip netns exec {} tlspack.exe zone {} {} {} config_zone {}"'.format (host_info['netns']
+                                                                                        , c_args.cfg_name
+                                                                                        , c_args.run_tag
+                                                                                        , z_index
+                                                                                        , c_args.is_debug)
+    stop_cmd_internal = ''
+    for netdev in host_info['net_iface_map'].values():
+        cmd = ' "ip netns exec {} ip link set {} netns 1"'.format (host_info['netns'], netdev)
+        stop_cmd_internal += cmd
+
+    cmd_str = 'sudo docker exec -d {} python3 /usr/local/bin/tlspack.py {} {} {}'.format (zone_cname,
+                                                                        cmd_ctrl_dir,
+                                                                        start_cmd_internal, 
+                                                                        stop_cmd_internal)
+    os.system (cmd_str)
+
+
+def start_traffic(host_info, c_args):
     registry_dir = os.path.join(c_args.host_run_dir, 'registry', c_args.cfg_name)
     registry_file = os.path.join(registry_dir, 'tag.txt')
 
@@ -106,6 +147,17 @@ def start_traffic(c_args):
     with open(master_file, 'w') as f:
         f.write('0')  
 
+    # create cmd_ctrl entries
+    cmd_ctrl_dir = os.path.join(c_args.host_run_dir, 'traffic', c_args.cfg_name, 'cmd_ctrl')
+    os.system ('rm -rf {}'.format(cmd_ctrl_dir))
+    os.system ('mkdir -p {}'.format(cmd_ctrl_dir))
+    for zone in cfg_j['zones']:
+        if not zone['enable']:
+            continue
+        zone_dir = os.path.join (cmd_ctrl_dir, zone['zone_label'])
+        os.system ('mkdir -p {}'.format(zone_dir))
+
+
     # create resullt entries
     result_dir = os.path.join(c_args.host_run_dir, 'traffic', c_args.cfg_name
                                                 , 'results', c_args.run_tag)
@@ -146,6 +198,11 @@ def start_traffic(c_args):
                     os.system ('mkdir -p {}'.format(cs_grp_dir))
 
     # start zones
+    for netdev in host_info['net_dev_list']:
+        cmd_str = "sudo ip link set dev {} up".format(netdev)
+        os.system (cmd_str)
+
+    z_threads = []
     z_index = -1
     for zone in cfg_j['zones']:
         z_index += 1
@@ -153,26 +210,16 @@ def start_traffic(c_args):
         if not zone['enable']:
             continue
 
-        zone_cname = "{}-{}".format (c_args.cfg_name, zone['zone_label'])
-        rundir_map = "--volume={}:{}".format (c_args.host_run_dir
-                                                    , c_args.target_run_dir)
-        srcdir_map = "--volume={}:{}".format (c_args.host_src_dir
-                                                    , c_args.target_src_dir)
+        thd = Thread(target=zone_start_thread, args=[host_info, c_args, zone, z_index])
+        thd.daemon = True
+        thd.start()
+        z_threads.append(thd)
 
-        cmd_str1 = "sudo docker run --cap-add=SYS_PTRACE --security-opt seccomp=unconfined --network=bridge --privileged --name {} -it -d {} {} tlspack/tgen:latest /bin/bash".format (zone_cname, rundir_map, srcdir_map)
-
-        cmd_str2 = "sudo docker exec -d {} /usr/local/bin/tlspack.exe zone {} {} {} config_zone {}".format (zone_cname
-                                                                                                            , c_args.cfg_name
-                                                                                                            , c_args.run_tag
-                                                                                                            , z_index
-                                                                                                            , c_args.is_debug)
-        os.system (cmd_str1)
-        os.system (cmd_str2)
-
-        time.sleep (1)
+    for thd in z_threads:
+        thd.join()
 
 
-def stop_traffic(c_args):
+def stop_traffic(host_info, c_args):
     registry_dir = os.path.join(c_args.host_run_dir, 'registry', c_args.cfg_name)
     registry_file = os.path.join(registry_dir, 'tag.txt')
 
@@ -191,15 +238,36 @@ def stop_traffic(c_args):
         print 'invalid config file' 
         sys.exit(1)
         
-    c_list = ""
+    zone_stop_status_list = []
     for zone in cfg_j['zones']:
+
         if not zone['enable']:
             continue
-        zone_cname = "{}-{}".format (c_args.cfg_name, zone['zone_label'])
-        c_list = c_list + " " + zone_cname
 
-    cmd_str1 = "sudo docker rm -f {}".format (c_list)
-    os.system (cmd_str1)    
+        zone_stop_status_list.append ([zone, False])
+        cmd_ctrl_dir = os.path.join(c_args.host_run_dir, 'traffic', c_args.cfg_name, 'cmd_ctrl', zone['zone_label'])
+        stop_file = os.path.join(cmd_ctrl_dir, 'stop.txt')
+        with open(stop_file, 'w') as f:
+            f.write('')
+
+    # while True:
+    #     all_zone_stopped = True
+    #     for zone_info in zone_stop_status_list:
+    #         zone = zone_info[0]
+    #         zone_stop_status = zone_info[1]
+    #         if not zone_stop_status:
+    #             all_zone_stopped = False
+    #             cmd_ctrl_dir = os.path.join(c_args.host_run_dir, 'traffic', c_args.cfg_name, 'cmd_ctrl', zone['zone_label'])
+    #             finish_file = os.path.join(cmd_ctrl_dir, 'finish.txt')
+    #             try:
+    #                 with open(finish_file) as f:
+    #                     zone_info[1] = True
+    #             except:
+    #                 pass
+    #     if all_zone_stopped:
+    #         break
+
+    time.sleep (10)
     os.system ("rm -rf {}".format (registry_dir))
 
 
@@ -213,10 +281,18 @@ if __name__ == '__main__':
         print er
         sys.exit(1)
 
+    host_file = os.path.join (cmArgs.host_run_dir, 'sys/host')
+    try:
+        with open(host_file) as f:
+            host_info = json.load(f)
+    except Exception as er:
+        print er
+        sys.exit(1)
+
     if cmArgs.mode == 'start':
-        start_traffic(cmArgs)
+        start_traffic(host_info, cmArgs)
     elif cmArgs.mode == 'stop':
-        stop_traffic(cmArgs)
+        stop_traffic(host_info, cmArgs)
     else:
         print 'unknown mode'
         sys.exit(1)

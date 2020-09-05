@@ -583,25 +583,23 @@ def process_cps_template (cmd_args):
                     ],
 
                     "host_cmds" : [
-                        "sudo ip link set dev {{PARAMS.na_iface}} up",
                         "sudo docker network connect {{PARAMS.na_macvlan}} {{PARAMS.runtag}}-zone-{{zone_id}}-client"
                     ],
 
                     "zone_cmds" : [
-                        "ip link set dev {{PARAMS.iface_container}} up",
-                        "ifconfig {{PARAMS.iface_container}} hw ether {{PARAMS.client_mac_seed}}:{{'{:02x}'.format(zone_id)}}",
-                        "ip route add default dev {{PARAMS.iface_container}} table 200",
+                        "ip link set dev {{PARAMS.na_iface_container}} up",
+                        "ifconfig {{PARAMS.na_iface_container}} hw ether {{PARAMS.client_mac_seed}}:{{'{:02x}'.format(zone_id)}}",
+                        "ip route add default dev {{PARAMS.na_iface_container}} table 200",
                         "ip -4 route add local 12.2{{zone_id}}.51.0/24 dev lo",
                         "ip rule add from 12.2{{zone_id}}.51.0/24 table 200",
-                        "tcpdump -i {{PARAMS.iface_container}} {{PARAMS.tcpdump}} -w {{PARAMS.result_dir_container}}/zone-{{zone_id}}-client/init.pcap &"
+                        "tcpdump -i {{PARAMS.na_iface_container}} {{PARAMS.tcpdump}} -w {{PARAMS.result_dir_container}}/zone-{{zone_id}}-client/init.pcap &"
                     ]
                 }
                 ,
                 {
                     "zone_label" : "zone-{{zone_id}}-server",
                     "enable" : 1,
-                    "iface" : "{{PARAMS.iface_container}}",
-                    "tcpdump" : "{{PARAMS.tcpdump}}",
+
                     "app_list" : [
                         {
                             "app_type" : "tls_server",
@@ -648,17 +646,16 @@ def process_cps_template (cmd_args):
                     ],
 
                     "host_cmds" : [
-                        "sudo ip link set dev {{PARAMS.nb_iface}} up",
-                        "sudo docker network connect {{PARAMS.nb_macvlan}} {{PARAMS.runtag}}-zone-{{zone_id}}-server"
+                        "sudo docker network connect {{PARAMS.na_macvlan}} {{PARAMS.runtag}}-zone-{{zone_id}}-server"
                     ],
 
                     "zone_cmds" : [
-                        "ip link set dev {{PARAMS.iface_container}} up",
-                        "ifconfig {{PARAMS.iface_container}} hw ether {{PARAMS.server_mac_seed}}:{{'{:02x}'.format(zone_id)}}",
-                        "ip route add default dev {{PARAMS.iface_container}} table 200",
+                        "ip link set dev {{PARAMS.nb_iface_container}} up",
+                        "ifconfig {{PARAMS.nb_iface_container}} hw ether {{PARAMS.server_mac_seed}}:{{'{:02x}'.format(zone_id)}}",
+                        "ip route add default dev {{PARAMS.nb_iface_container}} table 200",
                         "ip -4 route add local 14.2{{zone_id}}.51.0/24 dev lo",
                         "ip rule add from 14.2{{zone_id}}.51.0/24 table 200",
-                        "tcpdump -i {{PARAMS.iface_container}} {{PARAMS.tcpdump}} -w {{PARAMS.result_dir_container}}/zone-{{zone_id}}-server/init.pcap &"
+                        "tcpdump -i {{PARAMS.nb_iface_container}} {{PARAMS.tcpdump}} -w {{PARAMS.result_dir_container}}/zone-{{zone_id}}-server/init.pcap &"
                     ]
                 }
                 {{ "," if not loop.last }}
@@ -1299,12 +1296,6 @@ def process_mcert_stats(result_dir):
 
 
 def add_c_arguments (arg_parser):
-    try:
-        with open('/root/rundir/sys/host') as f:
-            host_info = json.load(f)
-    except IOError:
-            host_info = {'cores' : 40}
-
     arg_parser.add_argument('--rundir'
                                 , action="store"
                                 , default='/root/rundir'
@@ -1314,11 +1305,6 @@ def add_c_arguments (arg_parser):
                                 , action="store"
                                 , default='/rundir'
                                 , help = 'rundir path in container')
-
-    arg_parser.add_argument('--na_macvlan'
-                                , action="store"
-                                , default=''
-                                , help = 'na_macvlan name')
 
     arg_parser.add_argument('--na'
                                 , action="store"
@@ -1331,11 +1317,6 @@ def add_c_arguments (arg_parser):
                                 , required=True
                                 , dest='nb_iface'
                                 , help = 'nb_iface name')
-
-    arg_parser.add_argument('--nb_macvlan'
-                                , action="store"
-                                , default=''
-                                , help = 'nb_macvlan name')
 
     arg_parser.add_argument('--iface_container'
                                 , action="store"
@@ -1355,7 +1336,7 @@ def add_c_arguments (arg_parser):
     arg_parser.add_argument('--zones'
                                 , action="store"
                                 , type=int
-                                , default=host_info['cores']/2
+                                , default=1
                                 , help = 'zones ')
 
     arg_parser.add_argument('--cps'
@@ -1491,6 +1472,7 @@ def add_c_arguments (arg_parser):
     return arg_parser
 
 def get_arguments ():
+
     arg_parser = argparse.ArgumentParser(description = 'test commands')
 
     subparsers = arg_parser.add_subparsers(dest='cmd_name'
@@ -1528,16 +1510,28 @@ def get_arguments ():
                                 , required=True
                                 , help = 'config id')
 
+    stop_parser.add_argument('--rundir'
+                                , action="store"
+                                , default='/root/rundir'
+                                , help = 'rundir path')
 
     stop_tproxy_parser.add_argument('--runtag'
                                 , action="store"
                                 , required=True
                                 , help = 'config id')
 
+    stop_tproxy_parser.add_argument('--rundir'
+                                , action="store"
+                                , default='/root/rundir'
+                                , help = 'rundir path')
 
     cmd_args = arg_parser.parse_args()
 
 
+    host_file = os.path.join (cmd_args.rundir, 'sys/host')
+    with open(host_file) as f:
+        host_info = json.load(f)
+    
     if cmd_args.cmd_name in ['cps', 'bw', 'cipher', 'active', 'tproxy', 'mcert']:
         cmd_args.traffic_dir = os.path.join(cmd_args.rundir
                                             , 'traffic'
@@ -1558,10 +1552,10 @@ def get_arguments ():
 
     if cmd_args.cmd_name in ['cps', 'bw', 'cipher', 'active', 'mcert']:
 
-        if not cmd_args.na_macvlan:
-            cmd_args.na_macvlan = cmd_args.na_iface+'macvlan'
-        if not cmd_args.nb_macvlan:
-            cmd_args.nb_macvlan = cmd_args.nb_iface+'macvlan'
+        cmd_args.na_macvlan = host_info['net_macvlan_map'][cmd_args.na_iface]
+        cmd_args.nb_macvlan = host_info['net_macvlan_map'][cmd_args.nb_iface]
+        cmd_args.na_iface_container = 'eth1'
+        cmd_args.nb_iface_container = 'eth1'
 
         cmd_args.cps = cmd_args.cps / cmd_args.zones
         cmd_args.max_active = cmd_args.max_active / cmd_args.zones
@@ -1581,10 +1575,11 @@ def get_arguments ():
                     raise Exception ('unsupported cipher - ' + cmd_args.cipher)
 
     elif cmd_args.cmd_name in ['tproxy']:
-        if not cmd_args.ta_macvlan:
-            cmd_args.ta_macvlan = cmd_args.ta_iface+'macvlan'
-        if not cmd_args.tb_macvlan:
-            cmd_args.tb_macvlan = cmd_args.tb_iface+'macvlan'
+        cmd_args.ta_macvlan = host_info['net_macvlan_map'][cmd_args.ta_iface]
+        cmd_args.tb_macvlan = host_info['net_macvlan_map'][cmd_args.tb_iface]
+        cmd_args.ta_iface_container = 'eth1'
+        cmd_args.tb_iface_container = 'eth2'
+
 
     else: #stop
         pass
@@ -1598,10 +1593,10 @@ def get_arguments ():
 #     os.system ( 'sudo docker run --rm -it --volume=/root/rundir:/rundir tlspack/tgen:latest tlspack.exe stop "{}"'.format(cfgid) )
 
 def start_traffic (cfgid, result_tag, is_debug, host_src_dir):
-    return os.system ( 'python ./ioctl.py start --cfg_name {}'.format(cfgid) )
+    return os.system ( 'python ./mask.py start --cfg_name {}'.format(cfgid) )
 
 def stop_traffic (cfgid):
-    os.system ( 'python ./ioctl.py stop --cfg_name {}'.format(cfgid) )
+    os.system ( 'python ./mask.py stop --cfg_name {}'.format(cfgid) )
 
 if __name__ == '__main__':
 

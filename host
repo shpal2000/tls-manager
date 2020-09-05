@@ -1,0 +1,20 @@
+{
+    "cores": 40,
+
+    "net_dev_list" : [ 
+        "ens161",
+        "ens256" 
+    ],
+
+    "net_macvlan_map" : {
+        "ens161" : "ens161macvlan",
+        "ens256" : "ens256macvlan"
+    },
+
+    "net_iface_map" : {
+        "ens161" : "eth1",
+        "ens256" : "eth2"
+    },
+
+    "netns" : "tool-ns"
+}
