@@ -7,6 +7,7 @@ import argparse
 import json
 import jinja2
 import time
+from threading import Thread
 import pdb
 
 supported_ciphers = [
@@ -518,6 +519,566 @@ supported_ciphers = [
 ]
 
 
+def start_containers(host_info, c_args):
+    rundir_map = "--volume={}:{}".format (c_args.host_rundir
+                                                , c_args.target_rundir)
+
+    srcdir_map = "--volume={}:{}".format (c_args.host_srcdir
+                                                , c_args.target_srcdir)
+
+    for z_index in range(host_info['cores']):
+        zone_cname = "tp-zone-{}".format (z_index+1)
+
+        cmd_str = "sudo docker run --cap-add=SYS_PTRACE --security-opt seccomp=unconfined --network=bridge --privileged --name {} -it -d {} {} tlspack/tgen:latest /bin/bash".format (zone_cname, rundir_map, srcdir_map)
+        os.system (cmd_str)
+
+        for netdev in host_info['net_dev_list']:
+            cmd_str = "sudo ip link set dev {} up".format(netdev)
+            os.system (cmd_str)
+            cmd_str = "sudo docker network connect {} {}".format(host_info['net_macvlan_map'][netdev], zone_cname)
+            os.system (cmd_str)
+
+def stop_containers(host_info, c_args):
+    for z_index in range(host_info['cores']):
+        zone_cname = "tp-zone-{}".format (z_index+1)
+        cmd_str = "sudo docker rm -f {}".format (zone_cname)
+        os.system (cmd_str)
+
+def restart_containers(host_info, c_args):
+    stop_containers(host_info, c_args)
+    start_containers(host_info, c_args)
+
+
+def add_common_params (arg_parser):
+    arg_parser.add_argument('--sysinit'
+                                , action="store_true"
+                                , default=False
+                                , help = 'sysinit')
+
+    arg_parser.add_argument('--host_rundir'
+                                , action="store"
+                                , default='/root/rundir'
+                                , help = 'rundir path')
+
+    arg_parser.add_argument('--target_rundir'
+                                , action="store"
+                                , default='/rundir'
+                                , help = 'rundir path in container')
+
+    arg_parser.add_argument('--host_srcdir'
+                                , action="store"
+                                , default='/root/tcpdash'
+                                , help = 'host_srcdir')
+
+    arg_parser.add_argument('--target_srcdir'
+                                , action="store"
+                                , default='/root/tcpdash'
+                                , help = 'target_srcdir')
+
+
+def add_common_start_params(arg_parser):
+
+    arg_parser.add_argument('--runtag'
+                                , action="store"
+                                , required=True
+                                , help = 'run id')
+
+    arg_parser.add_argument('--result_tag'
+                                , action="store"
+                                , default='latest'
+                                , help = 'result tag')
+
+def add_traffic_params (arg_parser):
+
+    add_common_params (arg_parser)
+
+    add_common_start_params (arg_parser)
+
+    arg_parser.add_argument('--na'
+                                , action="store"
+                                , required=True
+                                , dest='na_iface'
+                                , help = 'na_iface name')
+
+    arg_parser.add_argument('--nb'
+                                , action="store"
+                                , required=True
+                                , dest='nb_iface'
+                                , help = 'nb_iface name')
+
+    arg_parser.add_argument('--zones'
+                                , action="store"
+                                , type=int
+                                , default=1
+                                , help = 'zones ')
+
+    arg_parser.add_argument('--cps'
+                                , action="store"
+                                , type=int
+                                , required=True
+                                , help = 'tps : 1 - 10000')
+
+    arg_parser.add_argument('--max_pipeline'
+                                , action="store"
+                                , type=int
+                                , default=100
+                                , help = 'max_pipeline : 1 - 10000')
+
+    arg_parser.add_argument('--max_active'
+                                , action="store"
+                                , type=int
+                                , default=100
+                                , help = 'max_active : 1 - 2000000')
+
+    arg_parser.add_argument('--cipher'
+                                , action="store"
+                                , help = 'command name'
+                                , required=True)
+
+    arg_parser.add_argument('--sslv3'
+                                , action="store_true"
+                                , default=False
+                                , help = '0/1')
+
+    arg_parser.add_argument('--tls1'
+                                , action="store_true"
+                                , default=False
+                                , help = '0/1')
+                                
+    arg_parser.add_argument('--tls1_1'
+                                , action="store_true"
+                                , default=False
+                                , help = '0/1')
+
+    arg_parser.add_argument('--tls1_2'
+                                , action="store_true"
+                                , default=False
+                                , help = '0/1')
+
+    arg_parser.add_argument('--tls1_3'
+                                , action="store_true"
+                                , default=False
+                                , help = '0/1')
+
+    arg_parser.add_argument('--tcpdump'
+                                , action="store"
+                                , help = 'tcpdump options'
+                                , default='-c 1000')
+
+    arg_parser.add_argument('--total_conn_count'
+                                , action="store"
+                                , type=int
+                                , default=0
+                                , help = 'total connection counts')
+
+    arg_parser.add_argument('--client_mac_seed'
+                                , action="store"
+                                , help = '5 bytes'
+                                , default='02:42:ac:14:00')
+
+    arg_parser.add_argument('--server_mac_seed'
+                                , action="store"
+                                , help = '5 bytes'
+                                , default='02:42:ac:15:00')
+
+    arg_parser.add_argument('--app_next_write'
+                                , action="store"
+                                , type=int
+                                , default=0
+                                , help = 'app_next_write')
+
+    arg_parser.add_argument('--app_cs_data_len'
+                                , action="store"
+                                , type=int
+                                , default=128
+                                , help = 'app_cs_data_len')
+
+    arg_parser.add_argument('--app_sc_data_len'
+                                , action="store"
+                                , type=int
+                                , default=128
+                                , help = 'app_sc_data_len')
+
+    arg_parser.add_argument('--app_rcv_buff'
+                                , action="store"
+                                , type=int
+                                , default=0
+                                , help = 'app_rcv_buff')
+
+    arg_parser.add_argument('--app_snd_buff'
+                                , action="store"
+                                , type=int
+                                , default=0
+                                , help = 'app_snd_buff')
+
+    arg_parser.add_argument('--tcp_rcv_buff'
+                                , action="store"
+                                , type=int
+                                , default=0
+                                , help = 'tcp_rcv_buff')
+
+    arg_parser.add_argument('--tcp_snd_buff'
+                                , action="store"
+                                , type=int
+                                , default=0
+                                , help = 'tcp_snd_buff')
+
+def add_proxy_params (arg_parser):
+
+    add_common_params (arg_parser)
+
+    add_common_start_params (arg_parser)
+
+    arg_parser.add_argument('--proxy_traffic_vlan'
+                                , action="store"
+                                , type=int
+                                , required=True
+                                , help = '1-4095')
+
+    arg_parser.add_argument('--ta'
+                                , action="store"
+                                , required=True
+                                , dest = 'ta_iface'
+                                , help = 'ta host interface')
+
+    arg_parser.add_argument('--tb'
+                                , action="store"
+                                , required=True
+                                , dest = 'tb_iface'
+                                , help = 'tb host interface')
+
+    arg_parser.add_argument('--ta_macvlan'
+                                , action="store"
+                                , default=''
+                                , help = 'ta host macvlan')
+
+    arg_parser.add_argument('--tb_macvlan'
+                                , action="store"
+                                , default=''
+                                , help = 'tb host macvlan')
+
+    arg_parser.add_argument('--ta_iface_container'
+                                , action="store"
+                                , help = 'ta interface'
+                                , default='eth1')
+
+    arg_parser.add_argument('--tb_iface_container'
+                                , action="store"
+                                , help = 'tb interface'
+                                , default='eth2')
+
+    arg_parser.add_argument('--ta_subnet'
+                                , action="store"
+                                , help = 'ta subnet'
+                                , required=True)
+
+    arg_parser.add_argument('--tb_subnet'
+                                , action="store"
+                                , help = 'tb subnet'
+                                , required=True)
+
+    arg_parser.add_argument('--ta_tcpdump'
+                                , action="store"
+                                , help = 'ta tcpdump'
+                                , default='-c 100')
+
+    arg_parser.add_argument('--tb_tcpdump'
+                                , action="store"
+                                , help = 'tb tcpdump'
+                                , default='-c 100')
+
+    arg_parser.add_argument('--client_mac_seed'
+                                , action="store"
+                                , help = '5 bytes'
+                                , default='02:42:ac:14:00')
+
+    arg_parser.add_argument('--server_mac_seed'
+                                , action="store"
+                                , help = '5 bytes'
+                                , default='02:42:ac:15:00')
+
+def add_stop_params (arg_parser):
+    add_common_params (arg_parser)
+
+def add_status_params(arg_parser):
+    add_common_params (arg_parser)
+
+def zone_start_thread(host_info, c_args, zone, z_index):
+
+    zone_cname = "tp-zone-{}".format (z_index+1)
+    cmd_str = "sudo docker exec -d {} ip netns add {}".format(zone_cname, host_info['netns'])
+    os.system (cmd_str)
+
+    for netdev in host_info['net_iface_map'].values():
+        cmd_str = "sudo docker exec -d {} ip link set dev {} netns {}".format(zone_cname,
+                                                                netdev,
+                                                                host_info['netns'])
+        os.system (cmd_str)
+
+    cmd_str = "sudo docker exec -d {} cp -f /rundir/bin/tlspack.exe /usr/local/bin".format(zone_cname)
+    os.system (cmd_str)
+
+    cmd_str = "sudo docker exec -d {} cp -f /rundir/bin/tlspack.py /usr/local/bin".format(zone_cname)
+    os.system (cmd_str)
+
+
+    cmd_ctrl_dir = os.path.join(c_args.target_rundir, 'traffic', c_args.runtag, 'cmd_ctrl', zone['zone_label'])
+
+    start_cmd_internal = '"ip netns exec {} tlspack.exe zone {} {} {} config_zone {}"'.format (host_info['netns']
+                                                                                        , c_args.runtag
+                                                                                        , c_args.runtag
+                                                                                        , z_index
+                                                                                        , 0)
+    stop_cmd_internal = ''
+    for netdev in host_info['net_iface_map'].values():
+        cmd = ' "ip netns exec {} ip link set {} netns 1"'.format (host_info['netns'], netdev)
+        stop_cmd_internal += cmd
+
+    cmd_str = 'sudo docker exec -d {} python3 /usr/local/bin/tlspack.py {} {} {}'.format (zone_cname,
+                                                                        cmd_ctrl_dir,
+                                                                        start_cmd_internal, 
+                                                                        stop_cmd_internal)
+    os.system (cmd_str)
+
+
+    cmd_ctrl_dir = os.path.join(c_args.host_rundir, 'traffic', c_args.runtag, 'cmd_ctrl', zone['zone_label'])
+    started_file = os.path.join(cmd_ctrl_dir, 'started.txt')
+    while True:
+        time.sleep (1)
+        if os.path.exists (started_file):
+            break
+
+def start_traffic(host_info, c_args, traffic_s):
+    registry_dir = os.path.join(c_args.host_rundir, 'registry', 'one-app-mode')
+    registry_file = os.path.join(registry_dir, 'tag.txt')
+
+    if c_args.sysinit:
+        restart_containers (host_info, c_args)
+        os.system ("rm -rf {}".format (registry_dir))
+
+    # check if config runing
+    if os.path.exists(registry_file):
+        with open (registry_file) as f:
+            testname = f.read()
+
+        if testname == c_args.runtag:
+            print 'error: {} already running'.format (testname)
+        else:
+            print 'error: {} running'.format (testname)
+        sys.exit(1)
+
+    # create config dir; file
+    try:
+        cfg_j = json.loads (traffic_s)
+        traffic_s = json.dumps(cfg_j, indent=4)
+    except:
+        print traffic_s
+        sys.exit(1)
+
+    cfg_dir = os.path.join(c_args.host_rundir, 'traffic', c_args.runtag)
+    cfg_file = os.path.join(cfg_dir, 'config.json')
+
+    os.system ( 'rm -rf {}'.format(cfg_dir) )
+    os.system ( 'mkdir -p {}'.format(cfg_dir) )
+
+    with open(cfg_file, 'w') as f:
+        f.write(traffic_s)
+
+    # create registry entries
+    os.system ('mkdir -p {}'.format(registry_dir))
+
+    with open(registry_file, 'w') as f:
+        f.write(c_args.runtag)
+
+    for zone in cfg_j['zones']:
+        if not zone['enable']:
+            continue
+        is_app_enable = False
+        for app in zone['app_list']:
+            if app['enable']:
+                is_app_enable = True;
+                break
+        if not is_app_enable:
+            continue
+    
+        zone_file = os.path.join(registry_dir, zone['zone_label'])  
+        with open(zone_file, 'w') as f:
+            f.write('0')
+    
+    master_file = os.path.join(registry_dir, 'master')
+    with open(master_file, 'w') as f:
+        f.write('0')  
+
+    # create cmd_ctrl entries
+    cmd_ctrl_dir = os.path.join(cfg_dir, 'cmd_ctrl')
+    os.system ('rm -rf {}'.format(cmd_ctrl_dir))
+    os.system ('mkdir -p {}'.format(cmd_ctrl_dir))
+    for zone in cfg_j['zones']:
+        if not zone['enable']:
+            continue
+        zone_dir = os.path.join (cmd_ctrl_dir, zone['zone_label'])
+        os.system ('mkdir -p {}'.format(zone_dir))
+
+
+    # create resullt entries
+    result_dir = os.path.join(c_args.host_rundir, 'traffic', c_args.runtag
+                                                , 'results', c_args.runtag)
+    os.system ('rm -rf {}'.format(result_dir))
+    os.system ('mkdir -p {}'.format(result_dir))
+
+    zone_map = {}
+    for zone in cfg_j['zones']:
+        if not zone['enable']:
+            continue
+
+        zone_map[zone['zone_label']] = False
+
+        zone_dir = os.path.join (result_dir, zone['zone_label'])
+        os.system ('mkdir -p {}'.format(zone_dir))
+
+        for app in zone['app_list']:
+            if not app['enable']:
+                continue
+            app_dir = os.path.join (zone_dir, app['app_label'])
+            os.system ('mkdir -p {}'.format(app_dir))
+
+            if app.get('srv_list'):
+                for srv in app['srv_list']:
+                    if not srv['enable']:
+                        continue
+                    srv_dir = os.path.join (app_dir, srv['srv_label'])
+                    os.system ('mkdir -p {}'.format(srv_dir))
+
+            if app.get('proxy_list'):
+                for proxy in app['proxy_list']:
+                    if not proxy['enable']:
+                        continue
+                    proxy_dir = os.path.join (app_dir, proxy['proxy_label'])
+                    os.system ('mkdir -p {}'.format(proxy_dir))
+
+            if app.get('cs_grp_list'):
+                for cs_grp in app['cs_grp_list']:
+                    if not cs_grp['enable']:
+                        continue
+                    cs_grp_dir = os.path.join (app_dir, cs_grp['cs_grp_label'])
+                    os.system ('mkdir -p {}'.format(cs_grp_dir))
+
+    # start zones
+    for netdev in host_info['net_dev_list']:
+        cmd_str = "sudo ip link set dev {} up".format(netdev)
+        os.system (cmd_str)
+
+    next_step = 0
+    while next_step < host_info['max_sequence']:
+        next_step += 1
+        z_threads = []
+        z_index = -1
+        for zone in cfg_j['zones']:
+            z_index += 1
+
+            if not zone['enable']:
+                continue
+
+            if zone.get('step', 1) == next_step:
+                thd = Thread(target=zone_start_thread, args=[host_info, c_args, zone, z_index])
+                thd.daemon = True
+                thd.start()
+                z_threads.append(thd)
+        if z_threads:
+            for thd in z_threads:
+                thd.join()
+            time.sleep(1) #can be removed later
+
+    return (cfg_dir, result_dir)
+
+def zone_stop_thread(host_info, c_args, zone, z_index):
+
+    cmd_ctrl_dir = os.path.join(c_args.host_rundir, 'traffic', c_args.runtag, 'cmd_ctrl', zone['zone_label'])
+
+    stop_file = os.path.join(cmd_ctrl_dir, 'stop.txt')
+    while True:
+        time.sleep(1)
+        if os.path.exists (stop_file):
+            break
+        try:
+            with open (stop_file, 'w') as f:
+                f.write('1')
+        except:
+            pass
+
+    finish_file = os.path.join(cmd_ctrl_dir, 'finish.txt')
+    while True:
+        time.sleep (1)
+        if os.path.exists (finish_file):
+            break
+
+def stop_traffic(host_info, c_args):
+    registry_dir = os.path.join(c_args.host_rundir, 'registry', 'one-app-mode')
+    registry_file = os.path.join(registry_dir, 'tag.txt')
+
+    if c_args.sysinit:
+        restart_containers (host_info, c_args)
+        os.system ("rm -rf {}".format (registry_dir))
+        return
+
+    # check if config runing
+    if not os.path.exists(registry_file):
+        print 'no test running'
+        sys.exit(1)    
+
+    with open (registry_file) as f:
+        c_args.runtag = f.read()
+
+    cfg_dir = os.path.join(c_args.host_rundir, 'traffic', c_args.runtag)
+    cfg_file = os.path.join(cfg_dir, 'config.json')
+
+    try:
+        with open(cfg_file) as f:
+            cfg_j = json.load(f)
+    except:
+        print 'invalid config file' 
+        sys.exit(1)
+
+
+    z_threads = []
+    z_index = -1
+    for zone in cfg_j['zones']:
+        z_index += 1
+
+        if not zone['enable']:
+            continue
+
+        thd = Thread(target=zone_stop_thread, args=[host_info, c_args, zone, z_index])
+        thd.daemon = True
+        thd.start()
+        z_threads.append(thd)
+
+    for thd in z_threads:
+        thd.join()
+
+    os.system ("rm -rf {}".format (registry_dir))
+
+def show_traffic (host_info, c_args):
+    registry_dir = os.path.join(c_args.host_rundir, 'registry', 'one-app-mode')
+    registry_file = os.path.join(registry_dir, 'tag.txt')
+
+    # check if config runing
+    if os.path.exists(registry_file):
+        with open (registry_file) as f:
+            testname = f.read()
+        print '{} running'.format (testname)
+    else:
+        print 'no test running'
+
+def is_traffic (c_args):
+    registry_dir = os.path.join(c_args.host_rundir, 'registry', 'one-app-mode')
+    registry_file = os.path.join(registry_dir, 'tag.txt')
+    if os.path.exists(registry_file):
+        return True     
+    return False
+
+
+
 def add_cps_params (cmd_parser):
     cmd_parser.add_argument('--ecdsa_cert'
                                 , action="store_true"
@@ -917,107 +1478,8 @@ def process_bw_stats(result_dir):
             json.dump(ev_sockstats, f)
 
 
-
 def add_tproxy_params (cmd_parser):
-    cmd_parser.add_argument('--runtag'
-                                , action="store"
-                                , required=True
-                                , help = 'config id')
-
-    cmd_parser.add_argument('--result_tag'
-                                , action="store"
-                                , default='latest'
-                                , help = 'result tag')
-
-    cmd_parser.add_argument('--rundir'
-                                , action="store"
-                                , default='/root/rundir'
-                                , help = 'macvlan1 name')
-
-    cmd_parser.add_argument('--rundir_container'
-                                , action="store"
-                                , default='/rundir'
-                                , help = 'rundir path in container')
-
-    cmd_parser.add_argument('--debug'
-                                , action="store"
-                                , type=int
-                                , dest='is_debug'
-                                , default=0
-                                , help = '0;1;2')
-
-    cmd_parser.add_argument('--host_src_dir'
-                                , action="store"
-                                , help = 'host src dir for debuging'
-                                , default='/root/tcpdash')
-
-    cmd_parser.add_argument('--issl_tool_vlan'
-                                , action="store"
-                                , type=int
-                                , required=True
-                                , help = '1-4095')
-
-    cmd_parser.add_argument('--ta'
-                                , action="store"
-                                , required=True
-                                , dest = 'ta_iface'
-                                , help = 'ta host interface')
-
-    cmd_parser.add_argument('--tb'
-                                , action="store"
-                                , required=True
-                                , dest = 'tb_iface'
-                                , help = 'tb host interface')
-
-    cmd_parser.add_argument('--ta_macvlan'
-                                , action="store"
-                                , default=''
-                                , help = 'ta host macvlan')
-
-    cmd_parser.add_argument('--tb_macvlan'
-                                , action="store"
-                                , default=''
-                                , help = 'tb host macvlan')
-
-    cmd_parser.add_argument('--ta_iface_container'
-                                , action="store"
-                                , help = 'ta interface'
-                                , default='eth1')
-
-    cmd_parser.add_argument('--tb_iface_container'
-                                , action="store"
-                                , help = 'tb interface'
-                                , default='eth2')
-
-    cmd_parser.add_argument('--ta_subnet'
-                                , action="store"
-                                , help = 'ta subnet'
-                                , required=True)
-
-    cmd_parser.add_argument('--tb_subnet'
-                                , action="store"
-                                , help = 'tb subnet'
-                                , required=True)
-
-    cmd_parser.add_argument('--ta_tcpdump'
-                                , action="store"
-                                , help = 'ta tcpdump'
-                                , default='-c 100')
-
-    cmd_parser.add_argument('--tb_tcpdump'
-                                , action="store"
-                                , help = 'tb tcpdump'
-                                , default='-c 100')
-
-    cmd_parser.add_argument('--client_mac_seed'
-                                , action="store"
-                                , help = '5 bytes'
-                                , default='02:42:ac:14:00')
-
-    cmd_parser.add_argument('--server_mac_seed'
-                                , action="store"
-                                , help = '5 bytes'
-                                , default='02:42:ac:15:00')
+    pass
 
 def process_tproxy_template (cmd_args):
     tlspack_cfg = jinja2.Template ('''{
@@ -1063,20 +1525,20 @@ def process_tproxy_template (cmd_args):
                     "ip link set dev {{PARAMS.ta_iface_container}} up",
                     "ifconfig {{PARAMS.ta_iface_container}} hw ether 00:50:56:8c:5a:54",
                     "sysctl net.ipv4.conf.{{PARAMS.ta_iface_container}}.rp_filter=0",
-                    "ip link add link {{PARAMS.ta_iface_container}} name {{PARAMS.ta_iface_container}}.{{PARAMS.issl_tool_vlan}} type vlan id {{PARAMS.issl_tool_vlan}}",
-                    "ip link set dev {{PARAMS.ta_iface_container}}.{{PARAMS.issl_tool_vlan}} up",
-                    "ip addr add 1.1.1.1/24 dev {{PARAMS.ta_iface_container}}.{{PARAMS.issl_tool_vlan}}",
-                    "arp -i {{PARAMS.ta_iface_container}}.{{PARAMS.issl_tool_vlan}} -s 1.1.1.254 00:50:56:8c:86:c3",
-                    "ip route add {{PARAMS.ta_subnet}} via 1.1.1.254 dev {{PARAMS.ta_iface_container}}.{{PARAMS.issl_tool_vlan}}",
+                    "ip link add link {{PARAMS.ta_iface_container}} name {{PARAMS.ta_iface_container}}.{{PARAMS.proxy_traffic_vlan}} type vlan id {{PARAMS.proxy_traffic_vlan}}",
+                    "ip link set dev {{PARAMS.ta_iface_container}}.{{PARAMS.proxy_traffic_vlan}} up",
+                    "ip addr add 1.1.1.1/24 dev {{PARAMS.ta_iface_container}}.{{PARAMS.proxy_traffic_vlan}}",
+                    "arp -i {{PARAMS.ta_iface_container}}.{{PARAMS.proxy_traffic_vlan}} -s 1.1.1.254 00:50:56:8c:86:c3",
+                    "ip route add {{PARAMS.ta_subnet}} via 1.1.1.254 dev {{PARAMS.ta_iface_container}}.{{PARAMS.proxy_traffic_vlan}}",
 
                     "ip link set dev {{PARAMS.tb_iface_container}} up",
                     "ifconfig {{PARAMS.tb_iface_container}} hw ether 00:50:56:8c:86:c3",
                     "sysctl net.ipv4.conf.{{PARAMS.tb_iface_container}}.rp_filter=0",
-                    "ip link add link {{PARAMS.tb_iface_container}} name {{PARAMS.tb_iface_container}}.{{PARAMS.issl_tool_vlan}} type vlan id {{PARAMS.issl_tool_vlan}}",
-                    "ip link set dev {{PARAMS.tb_iface_container}}.{{PARAMS.issl_tool_vlan}} up",
-                    "ip addr add 2.2.2.1/24 dev {{PARAMS.tb_iface_container}}.{{PARAMS.issl_tool_vlan}}",
-                    "arp -i {{PARAMS.tb_iface_container}}.{{PARAMS.issl_tool_vlan}} -s 2.2.2.254 00:50:56:8c:5a:54",
-                    "ip route add {{PARAMS.tb_subnet}} via 2.2.2.254 dev {{PARAMS.tb_iface_container}}.{{PARAMS.issl_tool_vlan}}",
+                    "ip link add link {{PARAMS.tb_iface_container}} name {{PARAMS.tb_iface_container}}.{{PARAMS.proxy_traffic_vlan}} type vlan id {{PARAMS.proxy_traffic_vlan}}",
+                    "ip link set dev {{PARAMS.tb_iface_container}}.{{PARAMS.proxy_traffic_vlan}} up",
+                    "ip addr add 2.2.2.1/24 dev {{PARAMS.tb_iface_container}}.{{PARAMS.proxy_traffic_vlan}}",
+                    "arp -i {{PARAMS.tb_iface_container}}.{{PARAMS.proxy_traffic_vlan}} -s 2.2.2.254 00:50:56:8c:5a:54",
+                    "ip route add {{PARAMS.tb_subnet}} via 2.2.2.254 dev {{PARAMS.tb_iface_container}}.{{PARAMS.proxy_traffic_vlan}}",
 
                     "iptables -t mangle -N DIVERT",
                     "iptables -t mangle -A PREROUTING -p tcp -m socket -j DIVERT",
@@ -1084,8 +1546,8 @@ def process_tproxy_template (cmd_args):
                     "iptables -t mangle -A DIVERT -j ACCEPT",
                     "ip rule add fwmark 1 lookup 100",
                     "ip route add local 0.0.0.0/0 dev lo table 100",
-                    "iptables -t mangle -A PREROUTING -i {{PARAMS.ta_iface_container}}.{{PARAMS.issl_tool_vlan}} -p tcp --dport 443 -j TPROXY --tproxy-mark 0x1/0x1 --on-port 883",
-                    "iptables -t mangle -A PREROUTING -i {{PARAMS.tb_iface_container}}.{{PARAMS.issl_tool_vlan}} -p tcp --dport 443 -j TPROXY --tproxy-mark 0x1/0x1 --on-port 883",
+                    "iptables -t mangle -A PREROUTING -i {{PARAMS.ta_iface_container}}.{{PARAMS.proxy_traffic_vlan}} -p tcp --dport 443 -j TPROXY --tproxy-mark 0x1/0x1 --on-port 883",
+                    "iptables -t mangle -A PREROUTING -i {{PARAMS.tb_iface_container}}.{{PARAMS.proxy_traffic_vlan}} -p tcp --dport 443 -j TPROXY --tproxy-mark 0x1/0x1 --on-port 883",
 
                     "tcpdump -i {{PARAMS.ta_iface_container}} {{PARAMS.ta_tcpdump}} -w {{PARAMS.result_dir_container}}/zone-1-proxy/ta.pcap &",
                     "tcpdump -i {{PARAMS.tb_iface_container}} {{PARAMS.tb_tcpdump}} -w {{PARAMS.result_dir_container}}/zone-1-proxy/tb.pcap &"
@@ -1294,181 +1756,6 @@ def process_mcert_stats(result_dir):
             json.dump(ev_sockstats, f)
 
 
-def add_c_arguments (arg_parser):
-    arg_parser.add_argument('--rundir'
-                                , action="store"
-                                , default='/root/rundir'
-                                , help = 'rundir path')
-
-    arg_parser.add_argument('--rundir_container'
-                                , action="store"
-                                , default='/rundir'
-                                , help = 'rundir path in container')
-
-    arg_parser.add_argument('--na'
-                                , action="store"
-                                , required=True
-                                , dest='na_iface'
-                                , help = 'na_iface name')
-
-    arg_parser.add_argument('--nb'
-                                , action="store"
-                                , required=True
-                                , dest='nb_iface'
-                                , help = 'nb_iface name')
-
-    arg_parser.add_argument('--iface_container'
-                                , action="store"
-                                , default='eth1'
-                                , help = 'iface_container name')
-
-    arg_parser.add_argument('--runtag'
-                                , action="store"
-                                , required=True
-                                , help = 'run id')
-
-    arg_parser.add_argument('--result_tag'
-                                , action="store"
-                                , default='latest'
-                                , help = 'result tag')
-
-    arg_parser.add_argument('--zones'
-                                , action="store"
-                                , type=int
-                                , default=1
-                                , help = 'zones ')
-
-    arg_parser.add_argument('--cps'
-                                , action="store"
-                                , type=int
-                                , required=True
-                                , help = 'tps : 1 - 10000')
-
-    arg_parser.add_argument('--max_pipeline'
-                                , action="store"
-                                , type=int
-                                , default=100
-                                , help = 'max_pipeline : 1 - 10000')
-
-    arg_parser.add_argument('--max_active'
-                                , action="store"
-                                , type=int
-                                , default=100
-                                , help = 'max_active : 1 - 2000000')
-
-    arg_parser.add_argument('--server_count'
-                                , action="store"
-                                , type=int
-                                , default=100
-                                , help = 'server count')
-
-    arg_parser.add_argument('--cipher'
-                                , action="store"
-                                , help = 'command name'
-                                , required=True)
-
-    arg_parser.add_argument('--sslv3'
-                                , action="store_true"
-                                , default=False
-                                , help = '0/1')
-
-    arg_parser.add_argument('--tls1'
-                                , action="store_true"
-                                , default=False
-                                , help = '0/1')
-                                
-
-    arg_parser.add_argument('--tls1_1'
-                                , action="store_true"
-                                , default=False
-                                , help = '0/1')
-
-    arg_parser.add_argument('--tls1_2'
-                                , action="store_true"
-                                , default=False
-                                , help = '0/1')
-
-    arg_parser.add_argument('--tls1_3'
-                                , action="store_true"
-                                , default=False
-                                , help = '0/1')
-
-    arg_parser.add_argument('--debug'
-                                , action="store"
-                                , type=int
-                                , dest='is_debug'
-                                , default=0
-                                , help = '0;1;2')
-
-    arg_parser.add_argument('--host_src_dir'
-                                , action="store"
-                                , help = 'host src dir for debuging'
-                                , default='/root/tcpdash')
-
-    arg_parser.add_argument('--tcpdump'
-                                , action="store"
-                                , help = 'tcpdump options'
-                                , default='-c 1000')
-
-    arg_parser.add_argument('--total_conn_count'
-                                , action="store"
-                                , type=int
-                                , default=0
-                                , help = 'total connection counts')
-
-    arg_parser.add_argument('--client_mac_seed'
-                                , action="store"
-                                , help = '5 bytes'
-                                , default='02:42:ac:14:00')
-
-    arg_parser.add_argument('--server_mac_seed'
-                                , action="store"
-                                , help = '5 bytes'
-                                , default='02:42:ac:15:00')
-
-    arg_parser.add_argument('--app_next_write'
-                                , action="store"
-                                , type=int
-                                , default=0
-                                , help = 'app_next_write')
-
-    arg_parser.add_argument('--app_cs_data_len'
-                                , action="store"
-                                , type=int
-                                , default=128
-                                , help = 'app_cs_data_len')
-
-    arg_parser.add_argument('--app_sc_data_len'
-                                , action="store"
-                                , type=int
-                                , default=128
-                                , help = 'app_sc_data_len')
-
-    arg_parser.add_argument('--app_rcv_buff'
-                                , action="store"
-                                , type=int
-                                , default=0
-                                , help = 'app_rcv_buff')
-
-    arg_parser.add_argument('--app_snd_buff'
-                                , action="store"
-                                , type=int
-                                , default=0
-                                , help = 'app_snd_buff')
-
-    arg_parser.add_argument('--tcp_rcv_buff'
-                                , action="store"
-                                , type=int
-                                , default=0
-                                , help = 'tcp_rcv_buff')
-
-    arg_parser.add_argument('--tcp_snd_buff'
-                                , action="store"
-                                , type=int
-                                , default=0
-                                , help = 'tcp_snd_buff')
-
-    return arg_parser
 
 def get_arguments ():
 
@@ -1477,89 +1764,42 @@ def get_arguments ():
     subparsers = arg_parser.add_subparsers(dest='cmd_name'
                                                     ,help='sub-command help')
 
-    cps_parser = add_c_arguments (subparsers.add_parser('cps'
-                                                    , help='cps help'))
+    cps_parser = subparsers.add_parser('cps', help='cps help')
+    add_traffic_params(cps_parser)
+    add_cps_params (cps_parser)
 
-    bw_parser = add_c_arguments (subparsers.add_parser('bw'
-                                                    , help='bw help'))
+    bw_parser = subparsers.add_parser('bw', help='bw help')
+    add_traffic_params(bw_parser)
+    add_bw_params (bw_parser)
 
-    cipher_parser = add_c_arguments (subparsers.add_parser('cipher'
-                                                    , help='cipher help'))
-
-    conn_parser = add_c_arguments (subparsers.add_parser('active'
-                                                    , help='active help'))
-
-    mcert_parser = add_c_arguments (subparsers.add_parser('mcert'
-                                                    , help='mcert help'))
-
-    stop_parser = subparsers.add_parser('stop', help='stop help')
+    mcert_parser = subparsers.add_parser('mcert', help='mcert help')
+    add_traffic_params(mcert_parser)
+    add_mcert_params (mcert_parser)
 
     tproxy_parser = subparsers.add_parser('tproxy', help='tproxy help')
-
-    stop_tproxy_parser = subparsers.add_parser('stop_tproxy', help='stop help')
-
-    add_cps_params(cps_parser)
-
-    add_bw_params(bw_parser)
-
+    add_proxy_params (tproxy_parser)
     add_tproxy_params (tproxy_parser)
 
-    stop_parser.add_argument('--runtag'
-                                , action="store"
-                                , required=True
-                                , help = 'config id')
+    stop_parser = subparsers.add_parser('stop', help='stop help')
+    add_stop_params (stop_parser)
 
-    stop_parser.add_argument('--rundir'
-                                , action="store"
-                                , default='/root/rundir'
-                                , help = 'rundir path')
-
-    stop_tproxy_parser.add_argument('--runtag'
-                                , action="store"
-                                , required=True
-                                , help = 'config id')
-
-    stop_tproxy_parser.add_argument('--rundir'
-                                , action="store"
-                                , default='/root/rundir'
-                                , help = 'rundir path')
+    status_parser = subparsers.add_parser('status', help='stop help')
+    add_status_params (status_parser)
 
     cmd_args = arg_parser.parse_args()
 
 
-    host_file = os.path.join (cmd_args.rundir, 'sys/host')
-    with open(host_file) as f:
-        host_info = json.load(f)
-    
-    if cmd_args.cmd_name in ['cps', 'bw', 'cipher', 'active', 'tproxy', 'mcert']:
-        cmd_args.traffic_dir = os.path.join(cmd_args.rundir
-                                            , 'traffic'
-                                            , cmd_args.runtag).rstrip('/')
+    if cmd_args.cmd_name in ['cps', 'bw', 'mcert']:
 
-        cmd_args.result_dir = os.path.join (cmd_args.traffic_dir
-                                            , 'results'
-                                            ,  cmd_args.result_tag).rstrip('/')
-
-        cmd_args.traffic_dir_container = os.path.join(cmd_args.rundir_container
-                                            , 'traffic'
-                                            , cmd_args.runtag).rstrip('/')
-
-        cmd_args.result_dir_container = os.path.join (cmd_args.traffic_dir_container
-                                            , 'results'
-                                            ,  cmd_args.result_tag).rstrip('/')
-
-
-    if cmd_args.cmd_name in ['cps', 'bw', 'cipher', 'active', 'mcert']:
-
-        cmd_args.na_macvlan = host_info['net_macvlan_map'][cmd_args.na_iface]
-        cmd_args.nb_macvlan = host_info['net_macvlan_map'][cmd_args.nb_iface]
-        cmd_args.na_iface_container = 'eth1'
-        cmd_args.nb_iface_container = 'eth1'
+        # cmd_args.na_macvlan = host_info['net_macvlan_map'][cmd_args.na_iface]
+        # cmd_args.nb_macvlan = host_info['net_macvlan_map'][cmd_args.nb_iface]
+        # cmd_args.na_iface_container = 'eth1'
+        # cmd_args.nb_iface_container = 'eth1'
 
         cmd_args.cps = cmd_args.cps / cmd_args.zones
         cmd_args.max_active = cmd_args.max_active / cmd_args.zones
         cmd_args.max_pipeline = cmd_args.max_pipeline / cmd_args.zones
-        cmd_args.server_count = cmd_args.server_count / cmd_args.zones
+
 
         supported_cipher_names = map(lambda x : x['cipher_name']
                                                 , supported_ciphers)
@@ -1579,23 +1819,8 @@ def get_arguments ():
         cmd_args.ta_iface_container = 'eth1'
         cmd_args.tb_iface_container = 'eth2'
 
-
-    else: #stop
-        pass
-
     return cmd_args
 
-# def start_traffic (cfgid, result_tag, is_debug, host_src_dir):
-#     return os.system ( 'sudo docker run --name "{}-root" -it -d --volume=/root/rundir:/rundir tlspack/tgen:latest tlspack.exe start "{}" "{}" /root/rundir {} {}'.format(cfgid, cfgid, result_tag, is_debug, host_src_dir) )
-
-# def stop_traffic (cfgid):
-#     os.system ( 'sudo docker run --rm -it --volume=/root/rundir:/rundir tlspack/tgen:latest tlspack.exe stop "{}"'.format(cfgid) )
-
-def start_traffic (cfgid, result_tag, is_debug, host_src_dir):
-    return os.system ( 'python ./mask.py start --cfg_name {}'.format(cfgid) )
-
-def stop_traffic (cfgid):
-    os.system ( 'python ./mask.py stop --cfg_name {}'.format(cfgid) )
 
 if __name__ == '__main__':
 
@@ -1605,13 +1830,16 @@ if __name__ == '__main__':
         print er
         sys.exit(1)
 
-    registry_dir = os.path.join(CmdArgs.rundir, 'registry', CmdArgs.runtag)
-    registry_file = os.path.join(registry_dir, 'tag.txt')
-    if os.path.exists(registry_file):
-        print '{} running'.format(CmdArgs.runtag)
+    host_file = os.path.join (CmdArgs.host_rundir, 'sys/host')
+    try:
+        with open(host_file) as f:
+            host_info = json.load(f)
+    except Exception as er:
+        print er
         sys.exit(1)
 
-    if CmdArgs.cmd_name in ['cps', 'bw', 'cipher', 'active', 'tproxy', 'mcert']:
+
+    if CmdArgs.cmd_name in ['cps', 'bw', 'tproxy', 'mcert']:
         if CmdArgs.cmd_name == 'cps':
             traffic_s = process_cps_template(CmdArgs)
         elif CmdArgs.cmd_name == 'bw':
@@ -1621,71 +1849,42 @@ if __name__ == '__main__':
         elif CmdArgs.cmd_name == 'mcert':
             traffic_s = process_mcert_template(CmdArgs)
 
+        cfg_dir, result_dir = start_traffic(host_info, CmdArgs, traffic_s)
+
         try:
-            traffic_j = json.loads (traffic_s)
-        except:
-            print traffic_s
-            raise
+            pid = os.fork()
+            if pid > 0:
+                sys.exit(0)
+        except Exception as er:
+            print er
+            sys.exit(1)
+        
+        devnull = open(os.devnull, 'w')
+        while True:
+            time.sleep (2)
 
-        traffic_s = json.dumps(traffic_j, indent=4)
-
-        mon_dir = os.path.join (CmdArgs.traffic_dir, 'mon')
-
-        os.system ( 'rm -rf {}'.format(CmdArgs.traffic_dir) )
-        os.system ( 'mkdir -p {}'.format(CmdArgs.traffic_dir) )
-        os.system ( 'mkdir -p {}'.format(mon_dir) )
-
-        with open(os.path.join(CmdArgs.traffic_dir, 'config.json'), 'w') as f:
-            f.write(traffic_s)
-
-        start_status = -1
-        if CmdArgs.cmd_name in ['cps', 'bw', 'cipher', 'active', 'tproxy', 'mcert']:
-            start_status = start_traffic(CmdArgs.runtag, CmdArgs.result_tag, CmdArgs.is_debug, CmdArgs.host_src_dir)
-
-        if start_status == 0:
-            try:
-                pid = os.fork()
-                if pid > 0:
-                    mon_file = os.path.join (mon_dir, CmdArgs.runtag)
-                    with open (mon_file, 'w') as f:
-                        f.write(str(pid))
-                    sys.exit(0)
-            except Exception as er:
-                print er
-                sys.exit(1)
+            subprocess.call(['rsync', '-av', '--delete'
+                                , cfg_dir.rstrip('/')
+                                , '/var/www/html/tmp']
+                                , stdout=devnull, stderr=devnull)
             
-            mon_file = os.path.join (mon_dir, CmdArgs.runtag)
-            devnull = open(os.devnull, 'w')
-            while True:
-                time.sleep (1)
+            if not is_traffic (CmdArgs):
+                sys.exit(0)
 
-                subprocess.call(['rsync', '-av', '--delete'
-                                    , CmdArgs.traffic_dir.rstrip('/')
-                                    , '/var/www/html/tmp']
-                                    , stdout=devnull, stderr=devnull)
-                
-                if not os.path.exists (mon_file):
-                    sys.exit(0)
-
-                if CmdArgs.cmd_name == 'cps':
-                    process_cps_stats (CmdArgs.result_dir)
-                elif CmdArgs.cmd_name == 'bw':
-                    process_bw_stats (CmdArgs.result_dir)
-                elif CmdArgs.cmd_name == 'tproxy':
-                    process_tproxy_stats (CmdArgs.result_dir);
-                elif CmdArgs.cmd_name == 'mcert':
-                    process_mcert_stats (CmdArgs.result_dir);
-
-
+            if CmdArgs.cmd_name == 'cps':
+                process_cps_stats (result_dir)
+            elif CmdArgs.cmd_name == 'bw':
+                process_bw_stats (result_dir)
+            elif CmdArgs.cmd_name == 'tproxy':
+                process_tproxy_stats (result_dir);
+            elif CmdArgs.cmd_name == 'mcert':
+                process_mcert_stats (result_dir);
 
     elif CmdArgs.cmd_name == 'stop':
-        mon_file = os.path.join ('/root/rundir/mon', CmdArgs.runtag)
-        os.system ( 'rm -f {}'.format(mon_file) )
-        cfg_file = os.path.join ('/root/rundir/traffic', CmdArgs.runtag, 'config.json')
-        with open (cfg_file) as f:
-            cfg_j = json.load(f)
-        if cfg_j['tgen_app'] in ['cps', 'bw', 'cipher', 'active', 'tproxy', 'mcert']:
-            stop_traffic (CmdArgs.runtag)
+        stop_traffic (host_info, CmdArgs)
+
+    elif CmdArgs.cmd_name == 'status':
+        show_traffic (host_info, CmdArgs)
 
 
 
