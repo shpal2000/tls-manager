@@ -534,6 +534,7 @@ def process_cps_template (cmd_args):
                 {
                     "zone_label" : "zone-{{zone_id}}-client",
                     "enable" : 1,
+                    "step" : 2,
                     "app_list" : [
                         {
                             "app_type" : "tls_client",
@@ -599,7 +600,7 @@ def process_cps_template (cmd_args):
                 {
                     "zone_label" : "zone-{{zone_id}}-server",
                     "enable" : 1,
-
+                    "step" : 1,
                     "app_list" : [
                         {
                             "app_type" : "tls_server",
@@ -694,9 +695,7 @@ def process_cps_stats(result_dir):
                     if zone_dir.endswith('-server'):
                         ev_sockstats_server_list.append (stats_j)
             except:
-                ev_sockstats_client_list = []
-                ev_sockstats_server_list = []
-                break
+                pass
 
     if ev_sockstats_client_list:
         ev_sockstats = ev_sockstats_client_list.pop()
@@ -1606,6 +1605,12 @@ if __name__ == '__main__':
         print er
         sys.exit(1)
 
+    registry_dir = os.path.join(CmdArgs.rundir, 'registry', CmdArgs.runtag)
+    registry_file = os.path.join(registry_dir, 'tag.txt')
+    if os.path.exists(registry_file):
+        print '{} running'.format(CmdArgs.runtag)
+        sys.exit(1)
+
     if CmdArgs.cmd_name in ['cps', 'bw', 'cipher', 'active', 'tproxy', 'mcert']:
         if CmdArgs.cmd_name == 'cps':
             traffic_s = process_cps_template(CmdArgs)
@@ -1623,8 +1628,6 @@ if __name__ == '__main__':
             raise
 
         traffic_s = json.dumps(traffic_j, indent=4)
-        print traffic_s
-
 
         mon_dir = os.path.join (CmdArgs.traffic_dir, 'mon')
 

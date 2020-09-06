@@ -7,6 +7,7 @@ import json
 import time
 from threading import Thread
 from multiprocessing import Process
+import socket
 import pdb
 
 def add_c_arguments (arg_parser):
@@ -64,6 +65,37 @@ def get_arguments ():
 
     return arg_parser.parse_args()
 
+def zone_listener_thread(host, port, zone_map):
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+        s.bind((host, port))
+        s.listen()
+        s.settimeout(0.001)
+
+        while True:
+            conn = None
+            try:
+                conn, addr = s.accept()
+                conn.setblocking(1)
+            except:
+                pass
+
+            if conn:
+                with conn:
+                    all_data = ''
+                    while True:
+                        data = conn.recv(1024)
+                        if not data:
+                            break
+                        all_data += data
+                    if zone_map.get(all_data):
+                        zone_map[all_data] = 'True'
+                all_zone_complete = True
+                for zone_key in zone_map.keys():
+                    if not zone_map[zone_key]:
+                        all_zone_complete = False
+                        break
+                if all_zone_complete:
+                    break
 
 def zone_start_thread(host_info, c_args, zone, z_index):
 
@@ -102,6 +134,13 @@ def zone_start_thread(host_info, c_args, zone, z_index):
                                                                         stop_cmd_internal)
     os.system (cmd_str)
 
+
+    cmd_ctrl_dir = os.path.join(c_args.host_run_dir, 'traffic', c_args.cfg_name, 'cmd_ctrl', zone['zone_label'])
+    started_file = os.path.join(cmd_ctrl_dir, 'started.txt')
+    while True:
+        time.sleep (1)
+        if os.path.exists (started_file):
+            break
 
 def start_traffic(host_info, c_args):
     registry_dir = os.path.join(c_args.host_run_dir, 'registry', c_args.cfg_name)
@@ -164,9 +203,13 @@ def start_traffic(host_info, c_args):
     os.system ('rm -rf {}'.format(result_dir))
     os.system ('mkdir -p {}'.format(result_dir))
 
+    zone_map = {}
     for zone in cfg_j['zones']:
         if not zone['enable']:
             continue
+
+        zone_map[zone['zone_label']] = False
+
         zone_dir = os.path.join (result_dir, zone['zone_label'])
         os.system ('mkdir -p {}'.format(zone_dir))
 
@@ -202,22 +245,47 @@ def start_traffic(host_info, c_args):
         cmd_str = "sudo ip link set dev {} up".format(netdev)
         os.system (cmd_str)
 
-    z_threads = []
-    z_index = -1
-    for zone in cfg_j['zones']:
-        z_index += 1
+    next_step = 0
+    while next_step < host_info['max_sequence']:
+        next_step += 1
+        z_threads = []
+        z_index = -1
+        for zone in cfg_j['zones']:
+            z_index += 1
 
-        if not zone['enable']:
-            continue
+            if not zone['enable']:
+                continue
 
-        thd = Thread(target=zone_start_thread, args=[host_info, c_args, zone, z_index])
-        thd.daemon = True
-        thd.start()
-        z_threads.append(thd)
+            if zone.get('step', 1) == next_step:
+                thd = Thread(target=zone_start_thread, args=[host_info, c_args, zone, z_index])
+                thd.daemon = True
+                thd.start()
+                z_threads.append(thd)
+        if z_threads:
+            for thd in z_threads:
+                thd.join()
+            time.sleep(1) #can be removed later
 
-    for thd in z_threads:
-        thd.join()
+def zone_stop_thread(host_info, c_args, zone, z_index):
 
+    cmd_ctrl_dir = os.path.join(c_args.host_run_dir, 'traffic', c_args.cfg_name, 'cmd_ctrl', zone['zone_label'])
+
+    stop_file = os.path.join(cmd_ctrl_dir, 'stop.txt')
+    while True:
+        time.sleep(1)
+        if os.path.exists (stop_file):
+            break
+        try:
+            with open (stop_file, 'w') as f:
+                f.write('1')
+        except:
+            pass
+
+    finish_file = os.path.join(cmd_ctrl_dir, 'finish.txt')
+    while True:
+        time.sleep (1)
+        if os.path.exists (finish_file):
+            break
 
 def stop_traffic(host_info, c_args):
     registry_dir = os.path.join(c_args.host_run_dir, 'registry', c_args.cfg_name)
@@ -237,37 +305,24 @@ def stop_traffic(host_info, c_args):
     except:
         print 'invalid config file' 
         sys.exit(1)
-        
-    zone_stop_status_list = []
+
+
+    z_threads = []
+    z_index = -1
     for zone in cfg_j['zones']:
+        z_index += 1
 
         if not zone['enable']:
             continue
 
-        zone_stop_status_list.append ([zone, False])
-        cmd_ctrl_dir = os.path.join(c_args.host_run_dir, 'traffic', c_args.cfg_name, 'cmd_ctrl', zone['zone_label'])
-        stop_file = os.path.join(cmd_ctrl_dir, 'stop.txt')
-        with open(stop_file, 'w') as f:
-            f.write('')
+        thd = Thread(target=zone_stop_thread, args=[host_info, c_args, zone, z_index])
+        thd.daemon = True
+        thd.start()
+        z_threads.append(thd)
 
-    # while True:
-    #     all_zone_stopped = True
-    #     for zone_info in zone_stop_status_list:
-    #         zone = zone_info[0]
-    #         zone_stop_status = zone_info[1]
-    #         if not zone_stop_status:
-    #             all_zone_stopped = False
-    #             cmd_ctrl_dir = os.path.join(c_args.host_run_dir, 'traffic', c_args.cfg_name, 'cmd_ctrl', zone['zone_label'])
-    #             finish_file = os.path.join(cmd_ctrl_dir, 'finish.txt')
-    #             try:
-    #                 with open(finish_file) as f:
-    #                     zone_info[1] = True
-    #             except:
-    #                 pass
-    #     if all_zone_stopped:
-    #         break
+    for thd in z_threads:
+        thd.join()
 
-    time.sleep (10)
     os.system ("rm -rf {}".format (registry_dir))
 
 
