@@ -583,11 +583,6 @@ def add_common_start_params(arg_parser):
                                 , required=True
                                 , help = 'run id')
 
-    arg_parser.add_argument('--result_tag'
-                                , action="store"
-                                , default='latest'
-                                , help = 'result tag')
-
 def add_traffic_params (arg_parser):
 
     add_common_params (arg_parser)
@@ -818,21 +813,31 @@ def zone_start_thread(host_info, c_args, zone, z_index):
     cmd_str = "sudo docker exec -d {} cp -f /rundir/bin/tlspack.exe /usr/local/bin".format(zone_cname)
     os.system (cmd_str)
 
+    cmd_str = "sudo docker exec -d {} chmod +x /usr/local/bin/tlspack.exe".format(zone_cname)
+    os.system (cmd_str)
+
     cmd_str = "sudo docker exec -d {} cp -f /rundir/bin/tlspack.py /usr/local/bin".format(zone_cname)
     os.system (cmd_str)
 
+    cmd_str = "sudo docker exec -d {} chmod +x /usr/local/bin/tlspack.py".format(zone_cname)
+    os.system (cmd_str)
 
-    cmd_ctrl_dir = os.path.join(c_args.target_rundir, 'traffic', c_args.runtag, 'cmd_ctrl', zone['zone_label'])
 
-    start_cmd_internal = '"ip netns exec {} tlspack.exe zone {} {} {} config_zone {}"'.format (host_info['netns']
-                                                                                        , c_args.runtag
-                                                                                        , c_args.runtag
-                                                                                        , z_index
-                                                                                        , 0)
+    cfg_file = os.path.join(c_args.target_rundir, 'traffic', c_args.runtag, 'config.json')
+    cmd_ctrl_dir = os.path.join(c_args.target_rundir, 'traffic', c_args.runtag, 'cmdctl', zone['zone_label'])
+    result_dir = os.path.join(c_args.target_rundir, 'traffic', c_args.runtag, 'result', zone['zone_label'])
+    started_file = os.path.join (cmd_ctrl_dir, 'started.txt')
+
+    start_cmd_internal = '"ip netns exec {} /usr/local/bin/tlspack.exe {} {} {} {}"'.format (host_info['netns']
+                                                                                        , result_dir.rstrip('/')
+                                                                                        , started_file
+                                                                                        , cfg_file
+                                                                                        , z_index)
     stop_cmd_internal = ''
     for netdev in host_info['net_iface_map'].values():
         cmd = ' "ip netns exec {} ip link set {} netns 1"'.format (host_info['netns'], netdev)
         stop_cmd_internal += cmd
+    stop_cmd_internal += ' "ip netns del {}"'.format(host_info['netns'])
 
     cmd_str = 'sudo docker exec -d {} python3 /usr/local/bin/tlspack.py {} {} {}'.format (zone_cname,
                                                                         cmd_ctrl_dir,
@@ -841,11 +846,12 @@ def zone_start_thread(host_info, c_args, zone, z_index):
     os.system (cmd_str)
 
 
-    cmd_ctrl_dir = os.path.join(c_args.host_rundir, 'traffic', c_args.runtag, 'cmd_ctrl', zone['zone_label'])
+    cmd_ctrl_dir = os.path.join(c_args.host_rundir, 'traffic', c_args.runtag, 'cmdctl', zone['zone_label'])
     started_file = os.path.join(cmd_ctrl_dir, 'started.txt')
+    finish_file = os.path.join (cmd_ctrl_dir, 'finish.txt')
     while True:
         time.sleep (1)
-        if os.path.exists (started_file):
+        if os.path.exists (started_file) or os.path.exists (finish_file):
             break
 
 def start_traffic(host_info, c_args, traffic_s):
@@ -910,7 +916,7 @@ def start_traffic(host_info, c_args, traffic_s):
         f.write('0')  
 
     # create cmd_ctrl entries
-    cmd_ctrl_dir = os.path.join(cfg_dir, 'cmd_ctrl')
+    cmd_ctrl_dir = os.path.join(cfg_dir, 'cmdctl')
     os.system ('rm -rf {}'.format(cmd_ctrl_dir))
     os.system ('mkdir -p {}'.format(cmd_ctrl_dir))
     for zone in cfg_j['zones']:
@@ -921,8 +927,7 @@ def start_traffic(host_info, c_args, traffic_s):
 
 
     # create resullt entries
-    result_dir = os.path.join(c_args.host_rundir, 'traffic', c_args.runtag
-                                                , 'results', c_args.runtag)
+    result_dir = os.path.join(c_args.host_rundir, 'traffic', c_args.runtag, 'result')
     os.system ('rm -rf {}'.format(result_dir))
     os.system ('mkdir -p {}'.format(result_dir))
 
@@ -980,6 +985,7 @@ def start_traffic(host_info, c_args, traffic_s):
                 continue
 
             if zone.get('step', 1) == next_step:
+                # zone_start_thread (host_info, c_args, zone, z_index)
                 thd = Thread(target=zone_start_thread, args=[host_info, c_args, zone, z_index])
                 thd.daemon = True
                 thd.start()
@@ -993,7 +999,7 @@ def start_traffic(host_info, c_args, traffic_s):
 
 def zone_stop_thread(host_info, c_args, zone, z_index):
 
-    cmd_ctrl_dir = os.path.join(c_args.host_rundir, 'traffic', c_args.runtag, 'cmd_ctrl', zone['zone_label'])
+    cmd_ctrl_dir = os.path.join(c_args.host_rundir, 'traffic', c_args.runtag, 'cmdctl', zone['zone_label'])
 
     stop_file = os.path.join(cmd_ctrl_dir, 'stop.txt')
     while True:
@@ -1144,10 +1150,6 @@ def process_cps_template (cmd_args):
                         }
                     ],
 
-                    "host_cmds" : [
-                        "sudo docker network connect {{PARAMS.na_macvlan}} {{PARAMS.runtag}}-zone-{{zone_id}}-client"
-                    ],
-
                     "zone_cmds" : [
                         "ip link set dev {{PARAMS.na_iface_container}} up",
                         "ifconfig {{PARAMS.na_iface_container}} hw ether {{PARAMS.client_mac_seed}}:{{'{:02x}'.format(zone_id)}}",
@@ -1205,10 +1207,6 @@ def process_cps_template (cmd_args):
                                 {%- endfor %}
                             ]
                         }
-                    ],
-
-                    "host_cmds" : [
-                        "sudo docker network connect {{PARAMS.na_macvlan}} {{PARAMS.runtag}}-zone-{{zone_id}}-server"
                     ],
 
                     "zone_cmds" : [
@@ -1788,49 +1786,18 @@ def get_arguments ():
 
     cmd_args = arg_parser.parse_args()
 
-
-    if cmd_args.cmd_name in ['cps', 'bw', 'mcert']:
-
-        # cmd_args.na_macvlan = host_info['net_macvlan_map'][cmd_args.na_iface]
-        # cmd_args.nb_macvlan = host_info['net_macvlan_map'][cmd_args.nb_iface]
-        # cmd_args.na_iface_container = 'eth1'
-        # cmd_args.nb_iface_container = 'eth1'
-
-        cmd_args.cps = cmd_args.cps / cmd_args.zones
-        cmd_args.max_active = cmd_args.max_active / cmd_args.zones
-        cmd_args.max_pipeline = cmd_args.max_pipeline / cmd_args.zones
-
-
-        supported_cipher_names = map(lambda x : x['cipher_name']
-                                                , supported_ciphers)
-
-        if cmd_args.cmd_name == 'cipher':
-            selected_ciphers = map(lambda x : x.strip(), cmd_args.cipher.split(':'))
-            for ciph in selected_ciphers:
-                if ciph not in supported_cipher_names:
-                    raise Exception ('unsupported cipher - ' + ciph)
-        elif cmd_args.cmd_name == 'cps':
-            if cmd_args.cipher not in supported_cipher_names:
-                    raise Exception ('unsupported cipher - ' + cmd_args.cipher)
-
-    elif cmd_args.cmd_name in ['tproxy']:
-        cmd_args.ta_macvlan = host_info['net_macvlan_map'][cmd_args.ta_iface]
-        cmd_args.tb_macvlan = host_info['net_macvlan_map'][cmd_args.tb_iface]
-        cmd_args.ta_iface_container = 'eth1'
-        cmd_args.tb_iface_container = 'eth2'
-
     return cmd_args
 
 
 if __name__ == '__main__':
 
     try:
-        CmdArgs = get_arguments ()
+        cmd_args = get_arguments ()
     except Exception as er:
         print er
         sys.exit(1)
 
-    host_file = os.path.join (CmdArgs.host_rundir, 'sys/host')
+    host_file = os.path.join (cmd_args.host_rundir, 'sys/host')
     try:
         with open(host_file) as f:
             host_info = json.load(f)
@@ -1839,17 +1806,43 @@ if __name__ == '__main__':
         sys.exit(1)
 
 
-    if CmdArgs.cmd_name in ['cps', 'bw', 'tproxy', 'mcert']:
-        if CmdArgs.cmd_name == 'cps':
-            traffic_s = process_cps_template(CmdArgs)
-        elif CmdArgs.cmd_name == 'bw':
-            traffic_s = process_bw_template(CmdArgs)
-        elif CmdArgs.cmd_name == 'tproxy':
-            traffic_s = process_tproxy_template(CmdArgs)
-        elif CmdArgs.cmd_name == 'mcert':
-            traffic_s = process_mcert_template(CmdArgs)
+    if cmd_args.cmd_name in ['cps', 'bw', 'tproxy', 'mcert']:
 
-        cfg_dir, result_dir = start_traffic(host_info, CmdArgs, traffic_s)
+        if cmd_args.cmd_name in ['cps', 'bw', 'mcert']:
+            cmd_args.na_iface_container = host_info['net_iface_map'][cmd_args.na_iface]
+            cmd_args.nb_iface_container = host_info['net_iface_map'][cmd_args.nb_iface]
+
+            cmd_args.cps = cmd_args.cps / cmd_args.zones
+            cmd_args.max_active = cmd_args.max_active / cmd_args.zones
+            cmd_args.max_pipeline = cmd_args.max_pipeline / cmd_args.zones
+
+
+            supported_cipher_names = map(lambda x : x['cipher_name']
+                                                    , supported_ciphers)
+
+            if cmd_args.cmd_name == 'cipher':
+                selected_ciphers = map(lambda x : x.strip(), cmd_args.cipher.split(':'))
+                for ciph in selected_ciphers:
+                    if ciph not in supported_cipher_names:
+                        raise Exception ('unsupported cipher - ' + ciph)
+            elif cmd_args.cmd_name == 'cps':
+                if cmd_args.cipher not in supported_cipher_names:
+                        raise Exception ('unsupported cipher - ' + cmd_args.cipher)
+
+        elif cmd_args.cmd_name in ['tproxy']:
+            cmd_args.ta_iface_container = host_info['net_iface_map'][cmd_args.ta_iface]
+            cmd_args.tb_iface_container = host_info['net_iface_map'][cmd_args.tb_iface]
+
+        if cmd_args.cmd_name == 'cps':
+            traffic_s = process_cps_template(cmd_args)
+        elif cmd_args.cmd_name == 'bw':
+            traffic_s = process_bw_template(cmd_args)
+        elif cmd_args.cmd_name == 'tproxy':
+            traffic_s = process_tproxy_template(cmd_args)
+        elif cmd_args.cmd_name == 'mcert':
+            traffic_s = process_mcert_template(cmd_args)
+
+        cfg_dir, result_dir = start_traffic(host_info, cmd_args, traffic_s)
 
         try:
             pid = os.fork()
@@ -1868,23 +1861,23 @@ if __name__ == '__main__':
                                 , '/var/www/html/tmp']
                                 , stdout=devnull, stderr=devnull)
             
-            if not is_traffic (CmdArgs):
+            if not is_traffic (cmd_args):
                 sys.exit(0)
 
-            if CmdArgs.cmd_name == 'cps':
+            if cmd_args.cmd_name == 'cps':
                 process_cps_stats (result_dir)
-            elif CmdArgs.cmd_name == 'bw':
+            elif cmd_args.cmd_name == 'bw':
                 process_bw_stats (result_dir)
-            elif CmdArgs.cmd_name == 'tproxy':
+            elif cmd_args.cmd_name == 'tproxy':
                 process_tproxy_stats (result_dir);
-            elif CmdArgs.cmd_name == 'mcert':
+            elif cmd_args.cmd_name == 'mcert':
                 process_mcert_stats (result_dir);
 
-    elif CmdArgs.cmd_name == 'stop':
-        stop_traffic (host_info, CmdArgs)
+    elif cmd_args.cmd_name == 'stop':
+        stop_traffic (host_info, cmd_args)
 
-    elif CmdArgs.cmd_name == 'status':
-        show_traffic (host_info, CmdArgs)
+    elif cmd_args.cmd_name == 'status':
+        show_traffic (host_info, cmd_args)
 
 
 
