@@ -9,6 +9,7 @@ import jinja2
 import time
 from threading import Thread
 import pdb
+import requests
 
 supported_ciphers = [
     {'cipher_name' : 'AES128-SHA',
@@ -718,6 +719,26 @@ def add_traffic_params (arg_parser):
                                 , default=0
                                 , help = 'tcp_snd_buff')
 
+    arg_parser.add_argument('--app_cs_starttls_len'
+                                , action="store"
+                                , type=int
+                                , default=0
+                                , help = 'app_cs_starttls_len')
+
+    arg_parser.add_argument('--app_sc_starttls_len'
+                            , action="store"
+                            , type=int
+                            , default=0
+                            , help = 'app_sc_starttls_len')
+
+    arg_parser.add_argument('--port_begin'
+                            , action="store"
+                            , type=int
+                            , default=5000
+                            , help = 'app_sc_starttls_len')
+
+
+
 def add_proxy_params (arg_parser):
 
     add_common_params (arg_parser)
@@ -798,17 +819,18 @@ def add_stop_params (arg_parser):
 def add_status_params(arg_parser):
     add_common_params (arg_parser)
 
-def zone_start_thread(host_info, c_args, zone, z_index):
+def add_enter_params (arg_parser):
+    add_common_params (arg_parser)
+
+def add_exit_params (arg_parser):
+    add_common_params (arg_parser)
+
+def zone_start_thread(host_info, c_args, z_index):
 
     zone_cname = "tp-zone-{}".format (z_index+1)
-    cmd_str = "sudo docker exec -d {} ip netns add {}".format(zone_cname, host_info['netns'])
-    os.system (cmd_str)
 
-    for netdev in host_info['net_iface_map'].values():
-        cmd_str = "sudo docker exec -d {} ip link set dev {} netns {}".format(zone_cname,
-                                                                netdev,
-                                                                host_info['netns'])
-        os.system (cmd_str)
+    cmd_str = "docker inspect --format='{{.NetworkSettings.IPAddress}}' " + zone_cname
+    zone_ipaddr = subprocess.check_output(cmd_str, shell=True, close_fds=True).strip()
 
     cmd_str = "sudo docker exec -d {} cp -f /rundir/bin/tlspack.exe /usr/local/bin".format(zone_cname)
     os.system (cmd_str)
@@ -816,43 +838,15 @@ def zone_start_thread(host_info, c_args, zone, z_index):
     cmd_str = "sudo docker exec -d {} chmod +x /usr/local/bin/tlspack.exe".format(zone_cname)
     os.system (cmd_str)
 
-    cmd_str = "sudo docker exec -d {} cp -f /rundir/bin/tlspack.py /usr/local/bin".format(zone_cname)
-    os.system (cmd_str)
-
-    cmd_str = "sudo docker exec -d {} chmod +x /usr/local/bin/tlspack.py".format(zone_cname)
-    os.system (cmd_str)
-
-
     cfg_file = os.path.join(c_args.target_rundir, 'traffic', c_args.runtag, 'config.json')
-    cmd_ctrl_dir = os.path.join(c_args.target_rundir, 'traffic', c_args.runtag, 'cmdctl', zone['zone_label'])
-    result_dir = os.path.join(c_args.target_rundir, 'traffic', c_args.runtag, 'result', zone['zone_label'])
-    started_file = os.path.join (cmd_ctrl_dir, 'started.txt')
 
-    start_cmd_internal = '"ip netns exec {} /usr/local/bin/tlspack.exe {} {} {} {}"'.format (host_info['netns']
-                                                                                        , result_dir.rstrip('/')
-                                                                                        , started_file
-                                                                                        , cfg_file
-                                                                                        , z_index)
-    stop_cmd_internal = ''
-    for netdev in host_info['net_iface_map'].values():
-        cmd = ' "ip netns exec {} ip link set {} netns 1"'.format (host_info['netns'], netdev)
-        stop_cmd_internal += cmd
-    stop_cmd_internal += ' "ip netns del {}"'.format(host_info['netns'])
+    requests.post('http://{}:8081/start'.format(zone_ipaddr)
+                    , data = json.dumps({'cfg_file':'/rundir/traffic/cps1/config.json'
+                                        , 'z_index' : z_index
+                                        , 'netdev_list' : [host_info['net_iface_map'][c_args.na_iface]
+                                        , host_info['net_iface_map'][c_args.nb_iface] ] })
+                    , headers={'Content-type': 'application/json', 'Accept': 'text/plain'})
 
-    cmd_str = 'sudo docker exec -d {} python3 /usr/local/bin/tlspack.py {} {} {}'.format (zone_cname,
-                                                                        cmd_ctrl_dir,
-                                                                        start_cmd_internal, 
-                                                                        stop_cmd_internal)
-    os.system (cmd_str)
-
-
-    cmd_ctrl_dir = os.path.join(c_args.host_rundir, 'traffic', c_args.runtag, 'cmdctl', zone['zone_label'])
-    started_file = os.path.join(cmd_ctrl_dir, 'started.txt')
-    finish_file = os.path.join (cmd_ctrl_dir, 'finish.txt')
-    while True:
-        time.sleep (1)
-        if os.path.exists (started_file) or os.path.exists (finish_file):
-            break
 
 def start_traffic(host_info, c_args, traffic_s):
     registry_dir = os.path.join(c_args.host_rundir, 'registry', 'one-app-mode')
@@ -986,7 +980,7 @@ def start_traffic(host_info, c_args, traffic_s):
 
             if zone.get('step', 1) == next_step:
                 # zone_start_thread (host_info, c_args, zone, z_index)
-                thd = Thread(target=zone_start_thread, args=[host_info, c_args, zone, z_index])
+                thd = Thread(target=zone_start_thread, args=[host_info, c_args, z_index])
                 thd.daemon = True
                 thd.start()
                 z_threads.append(thd)
@@ -997,26 +991,17 @@ def start_traffic(host_info, c_args, traffic_s):
 
     return (cfg_dir, result_dir)
 
-def zone_stop_thread(host_info, c_args, zone, z_index):
+def zone_stop_thread(host_info, c_args, z_index):
 
-    cmd_ctrl_dir = os.path.join(c_args.host_rundir, 'traffic', c_args.runtag, 'cmdctl', zone['zone_label'])
+    zone_cname = "tp-zone-{}".format (z_index+1)
 
-    stop_file = os.path.join(cmd_ctrl_dir, 'stop.txt')
-    while True:
-        time.sleep(1)
-        if os.path.exists (stop_file):
-            break
-        try:
-            with open (stop_file, 'w') as f:
-                f.write('1')
-        except:
-            pass
+    cmd_str = "docker inspect --format='{{.NetworkSettings.IPAddress}}' " + zone_cname
+    zone_ipaddr = subprocess.check_output(cmd_str, shell=True, close_fds=True).strip()
 
-    finish_file = os.path.join(cmd_ctrl_dir, 'finish.txt')
-    while True:
-        time.sleep (1)
-        if os.path.exists (finish_file):
-            break
+    requests.post('http://{}:8081/stop'.format(zone_ipaddr)
+                    , data = json.dumps({'netdev_list' : ['eth1', 'eth2' ] })
+                    , headers={'Content-type': 'application/json', 'Accept': 'text/plain'})
+
 
 def stop_traffic(host_info, c_args):
     registry_dir = os.path.join(c_args.host_rundir, 'registry', 'one-app-mode')
@@ -1054,7 +1039,7 @@ def stop_traffic(host_info, c_args):
         if not zone['enable']:
             continue
 
-        thd = Thread(target=zone_stop_thread, args=[host_info, c_args, zone, z_index])
+        thd = Thread(target=zone_stop_thread, args=[host_info, c_args, z_index])
         thd.daemon = True
         thd.start()
         z_threads.append(thd)
@@ -1128,7 +1113,7 @@ def process_cps_template (cmd_args):
                                             "srv_port" : 443,
                                             "clnt_ip_begin" : "12.2{{zone_id}}.51.{{1+loop.index0*10}}",
                                             "clnt_ip_end" : "12.2{{zone_id}}.51.{{loop.index*10}}",
-                                            "clnt_port_begin" : 5000,
+                                            "clnt_port_begin" : {{PARAMS.port_begin}},
                                             "clnt_port_end" : 65000,
                                             "cipher" : "{{PARAMS.cipher}}",
                                             "tls_version" : "{{tls_ver}}",
@@ -1141,8 +1126,8 @@ def process_cps_template (cmd_args):
                                             "tcp_snd_buff" : {{PARAMS.tcp_snd_buff}},
                                             "cs_data_len" : {{PARAMS.app_cs_data_len}},
                                             "sc_data_len" : {{PARAMS.app_sc_data_len}},
-                                            "cs_start_tls_len" : 0,
-                                            "sc_start_tls_len" : 0
+                                            "cs_start_tls_len" : {{PARAMS.app_cs_starttls_len}},
+                                            "sc_start_tls_len" : {{PARAMS.app_sc_starttls_len}}
                                         }
                                     {%- endif %}
                                 {%- endfor %}                         
@@ -1182,9 +1167,9 @@ def process_cps_template (cmd_args):
                                         {
                                             "srv_label" : "srv_{{loop.index}}",
                                             "enable" : 1,
-					    "emulation_id" : 1,
-					    "begin_cert_index" : {{zone_id*2000}},
-					    "end_cert_index" : 100000, 
+                                            "emulation_id" : 0,
+                                            "begin_cert_index" : {{zone_id*2000}},
+                                            "end_cert_index" : 100000, 
                                             "srv_ip" : "14.2{{zone_id}}.51.{{loop.index}}",
                                             "srv_port" : 443,
                                             "srv_cert" : "{{PARAMS.server_cert}}",
@@ -1200,8 +1185,8 @@ def process_cps_template (cmd_args):
                                             "tcp_snd_buff" : {{PARAMS.tcp_snd_buff}},
                                             "cs_data_len" : {{PARAMS.app_cs_data_len}},
                                             "sc_data_len" : {{PARAMS.app_sc_data_len}},
-                                            "cs_start_tls_len" : 0,
-                                            "sc_start_tls_len" : 0
+                                            "cs_start_tls_len" : {{PARAMS.app_cs_starttls_len}},
+                                            "sc_start_tls_len" : {{PARAMS.app_sc_starttls_len}}
                                         }
                                     {%- endif %}
                                 {%- endfor %}
@@ -1320,7 +1305,7 @@ def process_bw_template (cmd_args):
                                             "srv_port" : 443,
                                             "clnt_ip_begin" : "22.2{{zone_id}}.51.{{1+loop.index0*10}}",
                                             "clnt_ip_end" : "22.2{{zone_id}}.51.{{loop.index*10}}",
-                                            "clnt_port_begin" : 5000,
+                                            "clnt_port_begin" : {{PARAMS.port_begin}},
                                             "clnt_port_end" : 65000,
                                             "cipher" : "{{PARAMS.cipher}}",
                                             "tls_version" : "{{tls_ver}}",
@@ -1333,8 +1318,8 @@ def process_bw_template (cmd_args):
                                             "tcp_snd_buff" : {{PARAMS.tcp_snd_buff}},
                                             "cs_data_len" : {{PARAMS.app_cs_data_len}},
                                             "sc_data_len" : {{PARAMS.app_sc_data_len}},
-                                            "cs_start_tls_len" : 0,
-                                            "sc_start_tls_len" : 0
+                                            "cs_start_tls_len" : {{PARAMS.app_cs_starttls_len}},
+                                            "sc_start_tls_len" : {{PARAMS.app_sc_starttls_len}}
                                         }
                                     {%- endif %}
                                 {%- endfor %}                         
@@ -1342,18 +1327,13 @@ def process_bw_template (cmd_args):
                         }
                     ],
 
-                    "host_cmds" : [
-                        "sudo ip link set dev {{PARAMS.na_iface}} up",
-                        "sudo docker network connect {{PARAMS.na_macvlan}} {{PARAMS.runtag}}-zone-{{zone_id}}-client"
-                    ],
-
                     "zone_cmds" : [
-                        "ip link set dev {{PARAMS.iface_container}} up",
-                        "ifconfig {{PARAMS.iface_container}} hw ether {{PARAMS.client_mac_seed}}:{{'{:02x}'.format(zone_id)}}",
-                        "ip route add default dev {{PARAMS.iface_container}} table 200",
+                        "ip link set dev {{PARAMS.na_iface_container}} up",
+                        "ifconfig {{PARAMS.na_iface_container}} hw ether {{PARAMS.client_mac_seed}}:{{'{:02x}'.format(zone_id)}}",
+                        "ip route add default dev {{PARAMS.na_iface_container}} table 200",
                         "ip -4 route add local 22.2{{zone_id}}.51.0/24 dev lo",
                         "ip rule add from 22.2{{zone_id}}.51.0/24 table 200",
-                        "tcpdump -i {{PARAMS.iface_container}} {{PARAMS.tcpdump}} -w {{PARAMS.result_dir_container}}/zone-{{zone_id}}-client/init.pcap &"
+                        "tcpdump -i {{PARAMS.na_iface_container}} {{PARAMS.tcpdump}} -w {{PARAMS.result_dir_container}}/zone-{{zone_id}}-client/init.pcap &"
                     ]                    
                 }
                 ,
@@ -1394,8 +1374,8 @@ def process_bw_template (cmd_args):
                                             "tcp_snd_buff" : {{PARAMS.tcp_snd_buff}},
                                             "cs_data_len" : {{PARAMS.app_cs_data_len}},
                                             "sc_data_len" : {{PARAMS.app_sc_data_len}},
-                                            "cs_start_tls_len" : 0,
-                                            "sc_start_tls_len" : 0
+                                            "cs_start_tls_len" : {{PARAMS.app_cs_starttls_len}},
+                                            "sc_start_tls_len" : {{PARAMS.app_sc_starttls_len}}
                                         }
                                     {%- endif %}
                                 {%- endfor %}
@@ -1403,18 +1383,13 @@ def process_bw_template (cmd_args):
                         }
                     ],
 
-                    "host_cmds" : [
-                        "sudo ip link set dev {{PARAMS.nb_iface}} up",
-                        "sudo docker network connect {{PARAMS.nb_macvlan}} {{PARAMS.runtag}}-zone-{{zone_id}}-server"
-                    ],
-
                     "zone_cmds" : [
-                        "ip link set dev {{PARAMS.iface_container}} up",
-                        "ifconfig {{PARAMS.iface_container}} hw ether {{PARAMS.server_mac_seed}}:{{'{:02x}'.format(zone_id)}}",
-                        "ip route add default dev {{PARAMS.iface_container}} table 200",
+                        "ip link set dev {{PARAMS.nb_iface_container}} up",
+                        "ifconfig {{PARAMS.nb_iface_container}} hw ether {{PARAMS.server_mac_seed}}:{{'{:02x}'.format(zone_id)}}",
+                        "ip route add default dev {{PARAMS.nb_iface_container}} table 200",
                         "ip -4 route add local 24.2{{zone_id}}.51.0/24 dev lo",
                         "ip rule add from 24.2{{zone_id}}.51.0/24 table 200",
-                        "tcpdump -i {{PARAMS.iface_container}} {{PARAMS.tcpdump}} -w {{PARAMS.result_dir_container}}/zone-{{zone_id}}-server/init.pcap &"
+                        "tcpdump -i {{PARAMS.nb_iface_container}} {{PARAMS.tcpdump}} -w {{PARAMS.result_dir_container}}/zone-{{zone_id}}-server/init.pcap &"
                     ]
                 }
                 {{ "," if not loop.last }}
@@ -1601,7 +1576,7 @@ def process_mcert_template (cmd_args):
                                             "srv_port" : 443,
                                             "clnt_ip_begin" : "12.2{{zone_id}}.51.{{1+loop.index0*10}}",
                                             "clnt_ip_end" : "12.2{{zone_id}}.51.{{loop.index*10}}",
-                                            "clnt_port_begin" : 5000,
+                                            "clnt_port_begin" : {{PARAMS.port_begin}},
                                             "clnt_port_end" : 65000,
                                             "cipher" : "{{PARAMS.cipher}}",
                                             "tls_version" : "{{tls_ver}}",
@@ -1623,18 +1598,13 @@ def process_mcert_template (cmd_args):
                         }
                     ],
 
-                    "host_cmds" : [
-                        "sudo ip link set dev {{PARAMS.na_iface}} up",
-                        "sudo docker network connect {{PARAMS.na_macvlan}} {{PARAMS.runtag}}-zone-{{zone_id}}-client"
-                    ],
-
                     "zone_cmds" : [
-                        "ip link set dev {{PARAMS.iface_container}} up",
-                        "ifconfig {{PARAMS.iface_container}} hw ether {{PARAMS.client_mac_seed}}:{{'{:02x}'.format(zone_id)}}",
-                        "ip route add default dev {{PARAMS.iface_container}} table 200",
+                        "ip link set dev {{PARAMS.na_iface_container}} up",
+                        "ifconfig {{PARAMS.na_iface_container}} hw ether {{PARAMS.client_mac_seed}}:{{'{:02x}'.format(zone_id)}}",
+                        "ip route add default dev {{PARAMS.na_iface_container}} table 200",
                         "ip -4 route add local 12.2{{zone_id}}.51.0/24 dev lo",
                         "ip rule add from 12.2{{zone_id}}.51.0/24 table 200",
-                        "tcpdump -i {{PARAMS.iface_container}} {{PARAMS.tcpdump}} -w {{PARAMS.result_dir_container}}/zone-{{zone_id}}-client/init.pcap &"
+                        "tcpdump -i {{PARAMS.na_iface_container}} {{PARAMS.tcpdump}} -w {{PARAMS.result_dir_container}}/zone-{{zone_id}}-client/init.pcap &"
                     ]
                 }
                 ,
@@ -1661,7 +1631,7 @@ def process_mcert_template (cmd_args):
                                         {
                                             "srv_label" : "srv_{{loop.index}}",
                                             "enable" : 1,
-                                            "emulation_id" : 1,
+                                            "emulation_id" : 0,
                                             "srv_ip" : "14.2{{zone_id}}.51.{{loop.index}}",
                                             "srv_port" : 443,
                                             "srv_cert" : "{{PARAMS.server_cert}}",
@@ -1686,18 +1656,13 @@ def process_mcert_template (cmd_args):
                         }
                     ],
 
-                    "host_cmds" : [
-                        "sudo ip link set dev {{PARAMS.nb_iface}} up",
-                        "sudo docker network connect {{PARAMS.nb_macvlan}} {{PARAMS.runtag}}-zone-{{zone_id}}-server"
-                    ],
-
                     "zone_cmds" : [
-                        "ip link set dev {{PARAMS.iface_container}} up",
-                        "ifconfig {{PARAMS.iface_container}} hw ether {{PARAMS.server_mac_seed}}:{{'{:02x}'.format(zone_id)}}",
-                        "ip route add default dev {{PARAMS.iface_container}} table 200",
+                        "ip link set dev {{PARAMS.nb_iface_container}} up",
+                        "ifconfig {{PARAMS.nb_iface_container}} hw ether {{PARAMS.server_mac_seed}}:{{'{:02x}'.format(zone_id)}}",
+                        "ip route add default dev {{PARAMS.nb_iface_container}} table 200",
                         "ip -4 route add local 14.2{{zone_id}}.51.0/24 dev lo",
                         "ip rule add from 14.2{{zone_id}}.51.0/24 table 200",
-                        "tcpdump -i {{PARAMS.iface_container}} {{PARAMS.tcpdump}} -w {{PARAMS.result_dir_container}}/zone-{{zone_id}}-server/init.pcap &"
+                        "tcpdump -i {{PARAMS.nb_iface_container}} {{PARAMS.tcpdump}} -w {{PARAMS.result_dir_container}}/zone-{{zone_id}}-server/init.pcap &"
                     ]
                 }
                 {{ "," if not loop.last }}
@@ -1784,6 +1749,12 @@ def get_arguments ():
     status_parser = subparsers.add_parser('status', help='stop help')
     add_status_params (status_parser)
 
+    enter_parser = subparsers.add_parser('enter', help='clean help')
+    add_enter_params (enter_parser)
+
+    exit_parser = subparsers.add_parser('exit', help='clean help')
+    add_exit_params (exit_parser)
+
     cmd_args = arg_parser.parse_args()
 
     return cmd_args
@@ -1807,6 +1778,8 @@ if __name__ == '__main__':
 
 
     if cmd_args.cmd_name in ['cps', 'bw', 'tproxy', 'mcert']:
+
+        cmd_args.result_dir_container = os.path.join(cmd_args.target_rundir, 'traffic', cmd_args.runtag, 'result')
 
         if cmd_args.cmd_name in ['cps', 'bw', 'mcert']:
             cmd_args.na_iface_container = host_info['net_iface_map'][cmd_args.na_iface]
@@ -1878,6 +1851,12 @@ if __name__ == '__main__':
 
     elif cmd_args.cmd_name == 'status':
         show_traffic (host_info, cmd_args)
+
+    elif cmd_args.cmd_name == 'enter':
+        start_containers (host_info, cmd_args)
+
+    elif cmd_args.cmd_name == 'exit':
+        stop_containers (host_info, cmd_args)
 
 
 
