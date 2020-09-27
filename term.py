@@ -520,34 +520,53 @@ supported_ciphers = [
 ]
 
 
-def start_containers(host_info, c_args):
+def start_containers(node_info, c_args):
     rundir_map = "--volume={}:{}".format (c_args.host_rundir
                                                 , c_args.target_rundir)
 
     srcdir_map = "--volume={}:{}".format (c_args.host_srcdir
                                                 , c_args.target_srcdir)
 
-    for z_index in range(host_info['cores']):
+    for z_index in range(node_info['cores']):
         zone_cname = "tp-zone-{}".format (z_index+1)
 
         cmd_str = "sudo docker run --cap-add=SYS_PTRACE --security-opt seccomp=unconfined --network=bridge --privileged --name {} -it -d {} {} tlspack/tgen:latest /bin/bash".format (zone_cname, rundir_map, srcdir_map)
         os.system (cmd_str)
 
-        for netdev in host_info['net_dev_list']:
-            cmd_str = "sudo ip link set dev {} up".format(netdev)
+        for network in node_info['networks']:
+            host_iface = network['host_iface']
+            host_macvlan = network['host_macvlan']
+            cmd_str = "sudo ip link set dev {} up".format(host_iface)
             os.system (cmd_str)
-            cmd_str = "sudo docker network connect {} {}".format(host_info['net_macvlan_map'][netdev], zone_cname)
+            cmd_str = "sudo docker network connect {} {}".format(host_macvlan, zone_cname)
             os.system (cmd_str)
 
-def stop_containers(host_info, c_args):
-    for z_index in range(host_info['cores']):
+        cmd_str = "sudo docker exec -d {} cp -f /rundir/bin/tlspack.exe /usr/local/bin".format(zone_cname)
+        os.system (cmd_str)
+        cmd_str = "sudo docker exec -d {} chmod +x /usr/local/bin/tlspack.exe".format(zone_cname)
+        os.system (cmd_str)
+
+        cmd_str = "sudo docker exec -d {} cp -f /rundir/bin/rpc_proxy_main.py /usr/local/bin".format(zone_cname)
+        os.system (cmd_str)
+        cmd_str = "sudo docker exec -d {} chmod +x /usr/local/bin/rpc_proxy_main.py".format(zone_cname)
+        os.system (cmd_str)
+
+        cmd_str = "docker inspect --format='{{.NetworkSettings.IPAddress}}' " + zone_cname
+        zone_ipaddr = subprocess.check_output(cmd_str, shell=True, close_fds=True).strip()
+
+        cmd_str = "sudo docker exec -d {} python3 /usr/local/bin/rpc_proxy_main.py {} {}".format(zone_cname, zone_ipaddr, 8081)
+        os.system (cmd_str)
+
+
+def stop_containers(node_info, c_args):
+    for z_index in range(node_info['cores']):
         zone_cname = "tp-zone-{}".format (z_index+1)
         cmd_str = "sudo docker rm -f {}".format (zone_cname)
         os.system (cmd_str)
 
-def restart_containers(host_info, c_args):
-    stop_containers(host_info, c_args)
-    start_containers(host_info, c_args)
+def restart_containers(node_info, c_args):
+    stop_containers(node_info, c_args)
+    start_containers(node_info, c_args)
 
 
 def add_common_params (arg_parser):
@@ -575,6 +594,13 @@ def add_common_params (arg_parser):
                                 , action="store"
                                 , default='/root/tcpdash'
                                 , help = 'target_srcdir')
+
+    arg_parser.add_argument('--node'
+                                , action="store"
+                                , default='./node.json'
+                                , help = 'node file')
+
+                                
 
 
 def add_common_start_params(arg_parser):
@@ -822,38 +848,34 @@ def add_status_params(arg_parser):
 def add_enter_params (arg_parser):
     add_common_params (arg_parser)
 
+def add_reenter_params (arg_parser):
+    add_common_params (arg_parser)
+
 def add_exit_params (arg_parser):
     add_common_params (arg_parser)
 
-def zone_start_thread(host_info, c_args, z_index):
+def zone_start_thread(node_info, c_args, z_index):
 
     zone_cname = "tp-zone-{}".format (z_index+1)
 
     cmd_str = "docker inspect --format='{{.NetworkSettings.IPAddress}}' " + zone_cname
     zone_ipaddr = subprocess.check_output(cmd_str, shell=True, close_fds=True).strip()
 
-    cmd_str = "sudo docker exec -d {} cp -f /rundir/bin/tlspack.exe /usr/local/bin".format(zone_cname)
-    os.system (cmd_str)
-
-    cmd_str = "sudo docker exec -d {} chmod +x /usr/local/bin/tlspack.exe".format(zone_cname)
-    os.system (cmd_str)
-
     cfg_file = os.path.join(c_args.target_rundir, 'traffic', c_args.runtag, 'config.json')
 
     requests.post('http://{}:8081/start'.format(zone_ipaddr)
                     , data = json.dumps({'cfg_file':'/rundir/traffic/cps1/config.json'
                                         , 'z_index' : z_index
-                                        , 'netdev_list' : [host_info['net_iface_map'][c_args.na_iface]
-                                        , host_info['net_iface_map'][c_args.nb_iface] ] })
+                                        , 'net_ifaces' : map (lambda n : n['container_iface'], node_info['networks']) })
                     , headers={'Content-type': 'application/json', 'Accept': 'text/plain'})
 
 
-def start_traffic(host_info, c_args, traffic_s):
+def start_traffic(node_info, c_args, traffic_s):
     registry_dir = os.path.join(c_args.host_rundir, 'registry', 'one-app-mode')
     registry_file = os.path.join(registry_dir, 'tag.txt')
 
     if c_args.sysinit:
-        restart_containers (host_info, c_args)
+        restart_containers (node_info, c_args)
         os.system ("rm -rf {}".format (registry_dir))
 
     # check if config runing
@@ -880,6 +902,9 @@ def start_traffic(host_info, c_args, traffic_s):
 
     os.system ( 'rm -rf {}'.format(cfg_dir) )
     os.system ( 'mkdir -p {}'.format(cfg_dir) )
+    os.system ( 'mkdir -p {}'.format(os.path.join(cfg_dir, 'pcaps')) )
+    os.system ( 'mkdir -p {}'.format(os.path.join(cfg_dir, 'stats')) )
+    os.system ( 'mkdir -p {}'.format(os.path.join(cfg_dir, 'logs')) )
 
     with open(cfg_file, 'w') as f:
         f.write(traffic_s)
@@ -909,67 +934,7 @@ def start_traffic(host_info, c_args, traffic_s):
     with open(master_file, 'w') as f:
         f.write('0')  
 
-    # create cmd_ctrl entries
-    cmd_ctrl_dir = os.path.join(cfg_dir, 'cmdctl')
-    os.system ('rm -rf {}'.format(cmd_ctrl_dir))
-    os.system ('mkdir -p {}'.format(cmd_ctrl_dir))
-    for zone in cfg_j['zones']:
-        if not zone['enable']:
-            continue
-        zone_dir = os.path.join (cmd_ctrl_dir, zone['zone_label'])
-        os.system ('mkdir -p {}'.format(zone_dir))
-
-
-    # create resullt entries
-    result_dir = os.path.join(c_args.host_rundir, 'traffic', c_args.runtag, 'result')
-    os.system ('rm -rf {}'.format(result_dir))
-    os.system ('mkdir -p {}'.format(result_dir))
-
-    zone_map = {}
-    for zone in cfg_j['zones']:
-        if not zone['enable']:
-            continue
-
-        zone_map[zone['zone_label']] = False
-
-        zone_dir = os.path.join (result_dir, zone['zone_label'])
-        os.system ('mkdir -p {}'.format(zone_dir))
-
-        for app in zone['app_list']:
-            if not app['enable']:
-                continue
-            app_dir = os.path.join (zone_dir, app['app_label'])
-            os.system ('mkdir -p {}'.format(app_dir))
-
-            if app.get('srv_list'):
-                for srv in app['srv_list']:
-                    if not srv['enable']:
-                        continue
-                    srv_dir = os.path.join (app_dir, srv['srv_label'])
-                    os.system ('mkdir -p {}'.format(srv_dir))
-
-            if app.get('proxy_list'):
-                for proxy in app['proxy_list']:
-                    if not proxy['enable']:
-                        continue
-                    proxy_dir = os.path.join (app_dir, proxy['proxy_label'])
-                    os.system ('mkdir -p {}'.format(proxy_dir))
-
-            if app.get('cs_grp_list'):
-                for cs_grp in app['cs_grp_list']:
-                    if not cs_grp['enable']:
-                        continue
-                    cs_grp_dir = os.path.join (app_dir, cs_grp['cs_grp_label'])
-                    os.system ('mkdir -p {}'.format(cs_grp_dir))
-
-    # start zones
-    for netdev in host_info['net_dev_list']:
-        cmd_str = "sudo ip link set dev {} up".format(netdev)
-        os.system (cmd_str)
-
-    next_step = 0
-    while next_step < host_info['max_sequence']:
-        next_step += 1
+    for next_step in range(1, 3):
         z_threads = []
         z_index = -1
         for zone in cfg_j['zones']:
@@ -979,19 +944,16 @@ def start_traffic(host_info, c_args, traffic_s):
                 continue
 
             if zone.get('step', 1) == next_step:
-                # zone_start_thread (host_info, c_args, zone, z_index)
-                thd = Thread(target=zone_start_thread, args=[host_info, c_args, z_index])
+                thd = Thread(target=zone_start_thread, args=[node_info, c_args, z_index])
                 thd.daemon = True
                 thd.start()
                 z_threads.append(thd)
         if z_threads:
             for thd in z_threads:
                 thd.join()
-            time.sleep(1) #can be removed later
+            time.sleep(1) 
 
-    return (cfg_dir, result_dir)
-
-def zone_stop_thread(host_info, c_args, z_index):
+def zone_stop_thread(node_info, c_args, z_index):
 
     zone_cname = "tp-zone-{}".format (z_index+1)
 
@@ -999,16 +961,16 @@ def zone_stop_thread(host_info, c_args, z_index):
     zone_ipaddr = subprocess.check_output(cmd_str, shell=True, close_fds=True).strip()
 
     requests.post('http://{}:8081/stop'.format(zone_ipaddr)
-                    , data = json.dumps({'netdev_list' : ['eth1', 'eth2' ] })
+                    , data = json.dumps({'net_ifaces' : ['eth1', 'eth2' ] })
                     , headers={'Content-type': 'application/json', 'Accept': 'text/plain'})
 
 
-def stop_traffic(host_info, c_args):
+def stop_traffic(node_info, c_args):
     registry_dir = os.path.join(c_args.host_rundir, 'registry', 'one-app-mode')
     registry_file = os.path.join(registry_dir, 'tag.txt')
 
     if c_args.sysinit:
-        restart_containers (host_info, c_args)
+        restart_containers (node_info, c_args)
         os.system ("rm -rf {}".format (registry_dir))
         return
 
@@ -1039,7 +1001,7 @@ def stop_traffic(host_info, c_args):
         if not zone['enable']:
             continue
 
-        thd = Thread(target=zone_stop_thread, args=[host_info, c_args, z_index])
+        thd = Thread(target=zone_stop_thread, args=[node_info, c_args, z_index])
         thd.daemon = True
         thd.start()
         z_threads.append(thd)
@@ -1049,7 +1011,7 @@ def stop_traffic(host_info, c_args):
 
     os.system ("rm -rf {}".format (registry_dir))
 
-def show_traffic (host_info, c_args):
+def show_traffic (node_info, c_args):
     registry_dir = os.path.join(c_args.host_rundir, 'registry', 'one-app-mode')
     registry_file = os.path.join(registry_dir, 'tag.txt')
 
@@ -1061,12 +1023,6 @@ def show_traffic (host_info, c_args):
     else:
         print 'no test running'
 
-def is_traffic (c_args):
-    registry_dir = os.path.join(c_args.host_rundir, 'registry', 'one-app-mode')
-    registry_file = os.path.join(registry_dir, 'tag.txt')
-    if os.path.exists(registry_file):
-        return True     
-    return False
 
 
 
@@ -1141,7 +1097,7 @@ def process_cps_template (cmd_args):
                         "ip route add default dev {{PARAMS.na_iface_container}} table 200",
                         "ip -4 route add local 12.2{{zone_id}}.51.0/24 dev lo",
                         "ip rule add from 12.2{{zone_id}}.51.0/24 table 200",
-                        "tcpdump -i {{PARAMS.na_iface_container}} {{PARAMS.tcpdump}} -w {{PARAMS.result_dir_container}}/zone-{{zone_id}}-client/init.pcap &"
+                        "tcpdump -i {{PARAMS.na_iface_container}} {{PARAMS.tcpdump}} -w {{PARAMS.pcaps_dir_container.rstrip('/')}}/zone-{{zone_id}}-client.pcap &"
                     ]
                 }
                 ,
@@ -1200,7 +1156,7 @@ def process_cps_template (cmd_args):
                         "ip route add default dev {{PARAMS.nb_iface_container}} table 200",
                         "ip -4 route add local 14.2{{zone_id}}.51.0/24 dev lo",
                         "ip rule add from 14.2{{zone_id}}.51.0/24 table 200",
-                        "tcpdump -i {{PARAMS.nb_iface_container}} {{PARAMS.tcpdump}} -w {{PARAMS.result_dir_container}}/zone-{{zone_id}}-server/init.pcap &"
+                        "tcpdump -i {{PARAMS.nb_iface_container}} {{PARAMS.tcpdump}} -w {{PARAMS.pcaps_dir_container.rstrip('/')}}/zone-{{zone_id}}-server.pcap &"
                     ]
                 }
                 {{ "," if not loop.last }}
@@ -1215,50 +1171,6 @@ def process_cps_template (cmd_args):
         cmd_args.server_cert = '/rundir/certs/server.cert'
         cmd_args.server_key = '/rundir/certs/server.key'
     return tlspack_cfg.render(PARAMS = cmd_args)
-
-def process_cps_stats(result_dir):
-    ev_sockstats_client_list = []
-    ev_sockstats_server_list = []
-
-    result_dir_contents = []
-    try:
-        result_dir_contents = os.listdir(result_dir)
-    except:
-        pass
-
-    for zone_dir in result_dir_contents:
-        zone_dir_path = os.path.join(result_dir, zone_dir)
-        if os.path.isdir(zone_dir_path):
-            ev_sockstats_json_file = os.path.join (zone_dir_path
-                                            , 'ev_sockstats.json')
-            try:
-                with open(ev_sockstats_json_file) as f:
-                    stats_j = json.load(f)
-                    if zone_dir.endswith('-client'):
-                        ev_sockstats_client_list.append (stats_j)
-                    if zone_dir.endswith('-server'):
-                        ev_sockstats_server_list.append (stats_j)
-            except:
-                pass
-
-    if ev_sockstats_client_list:
-        ev_sockstats = ev_sockstats_client_list.pop()
-        while ev_sockstats_client_list:
-            next_ev_sockstats = ev_sockstats_client_list.pop()
-            for k, v in next_ev_sockstats.items():
-                ev_sockstats[k] += v
-        with open(os.path.join(result_dir, 'ev_sockstats_client.json'), 'w') as f:
-            json.dump(ev_sockstats, f)
-
-    if ev_sockstats_server_list:
-        ev_sockstats = ev_sockstats_server_list.pop()
-        while ev_sockstats_server_list:
-            next_ev_sockstats = ev_sockstats_server_list.pop()
-            for k, v in next_ev_sockstats.items():
-                ev_sockstats[k] += v
-        with open(os.path.join(result_dir, 'ev_sockstats_server.json'), 'w') as f:
-            json.dump(ev_sockstats, f)
-
 
 
 def add_bw_params (cmd_parser):
@@ -1333,7 +1245,7 @@ def process_bw_template (cmd_args):
                         "ip route add default dev {{PARAMS.na_iface_container}} table 200",
                         "ip -4 route add local 22.2{{zone_id}}.51.0/24 dev lo",
                         "ip rule add from 22.2{{zone_id}}.51.0/24 table 200",
-                        "tcpdump -i {{PARAMS.na_iface_container}} {{PARAMS.tcpdump}} -w {{PARAMS.result_dir_container}}/zone-{{zone_id}}-client/init.pcap &"
+                        "tcpdump -i {{PARAMS.na_iface_container}} {{PARAMS.tcpdump}} -w {{PARAMS.pcaps_dir_container.rstrip('/')}}/zone-{{zone_id}}-client.pcap &"
                     ]                    
                 }
                 ,
@@ -1389,7 +1301,7 @@ def process_bw_template (cmd_args):
                         "ip route add default dev {{PARAMS.nb_iface_container}} table 200",
                         "ip -4 route add local 24.2{{zone_id}}.51.0/24 dev lo",
                         "ip rule add from 24.2{{zone_id}}.51.0/24 table 200",
-                        "tcpdump -i {{PARAMS.nb_iface_container}} {{PARAMS.tcpdump}} -w {{PARAMS.result_dir_container}}/zone-{{zone_id}}-server/init.pcap &"
+                        "tcpdump -i {{PARAMS.nb_iface_container}} {{PARAMS.tcpdump}} -w {{PARAMS.pcaps_dir_container.rstrip('/')}}/zone-{{zone_id}}-server.pcap &"
                     ]
                 }
                 {{ "," if not loop.last }}
@@ -1405,50 +1317,6 @@ def process_bw_template (cmd_args):
         cmd_args.server_cert = '/rundir/certs/server.cert'
         cmd_args.server_key = '/rundir/certs/server.key'
     return tlspack_cfg.render(PARAMS = cmd_args)
-
-def process_bw_stats(result_dir):
-    ev_sockstats_client_list = []
-    ev_sockstats_server_list = []
-
-    result_dir_contents = []
-    try:
-        result_dir_contents = os.listdir(result_dir)
-    except:
-        pass
-
-    for zone_dir in result_dir_contents:
-        zone_dir_path = os.path.join(result_dir, zone_dir)
-        if os.path.isdir(zone_dir_path):
-            ev_sockstats_json_file = os.path.join (zone_dir_path
-                                            , 'ev_sockstats.json')
-            try:
-                with open(ev_sockstats_json_file) as f:
-                    stats_j = json.load(f)
-                    if zone_dir.endswith('-client'):
-                        ev_sockstats_client_list.append (stats_j)
-                    if zone_dir.endswith('-server'):
-                        ev_sockstats_server_list.append (stats_j)
-            except:
-                ev_sockstats_client_list = []
-                ev_sockstats_server_list = []
-                break
-    if ev_sockstats_client_list:
-        ev_sockstats = ev_sockstats_client_list.pop()
-        while ev_sockstats_client_list:
-            next_ev_sockstats = ev_sockstats_client_list.pop()
-            for k, v in next_ev_sockstats.items():
-                ev_sockstats[k] += v
-        with open(os.path.join(result_dir, 'ev_sockstats_client.json'), 'w') as f:
-            json.dump(ev_sockstats, f)
-
-    if ev_sockstats_server_list:
-        ev_sockstats = ev_sockstats_server_list.pop()
-        while ev_sockstats_server_list:
-            next_ev_sockstats = ev_sockstats_server_list.pop()
-            for k, v in next_ev_sockstats.items():
-                ev_sockstats[k] += v
-        with open(os.path.join(result_dir, 'ev_sockstats_server.json'), 'w') as f:
-            json.dump(ev_sockstats, f)
 
 
 def add_tproxy_params (cmd_parser):
@@ -1522,8 +1390,8 @@ def process_tproxy_template (cmd_args):
                     "iptables -t mangle -A PREROUTING -i {{PARAMS.ta_iface_container}}.{{PARAMS.proxy_traffic_vlan}} -p tcp --dport 443 -j TPROXY --tproxy-mark 0x1/0x1 --on-port 883",
                     "iptables -t mangle -A PREROUTING -i {{PARAMS.tb_iface_container}}.{{PARAMS.proxy_traffic_vlan}} -p tcp --dport 443 -j TPROXY --tproxy-mark 0x1/0x1 --on-port 883",
 
-                    "tcpdump -i {{PARAMS.ta_iface_container}} {{PARAMS.ta_tcpdump}} -w {{PARAMS.result_dir_container}}/zone-1-proxy/ta.pcap &",
-                    "tcpdump -i {{PARAMS.tb_iface_container}} {{PARAMS.tb_tcpdump}} -w {{PARAMS.result_dir_container}}/zone-1-proxy/tb.pcap &"
+                    "tcpdump -i {{PARAMS.ta_iface_container}} {{PARAMS.ta_tcpdump}} -w {{PARAMS.pcaps_dir_container.rstrip('/')}}/zone-1-proxy-ta.pcap &",
+                    "tcpdump -i {{PARAMS.tb_iface_container}} {{PARAMS.tb_tcpdump}} -w {{PARAMS.pcaps_dir_container.rstrip('/')}}/zone-1-proxy-tb.pcap &"
                 ]
             }
         ]
@@ -1532,8 +1400,6 @@ def process_tproxy_template (cmd_args):
 
     return tlspack_cfg.render(PARAMS = cmd_args)
 
-def process_tproxy_stats (result_dir):
-    pass
 
 
 
@@ -1604,7 +1470,7 @@ def process_mcert_template (cmd_args):
                         "ip route add default dev {{PARAMS.na_iface_container}} table 200",
                         "ip -4 route add local 12.2{{zone_id}}.51.0/24 dev lo",
                         "ip rule add from 12.2{{zone_id}}.51.0/24 table 200",
-                        "tcpdump -i {{PARAMS.na_iface_container}} {{PARAMS.tcpdump}} -w {{PARAMS.result_dir_container}}/zone-{{zone_id}}-client/init.pcap &"
+                        "tcpdump -i {{PARAMS.na_iface_container}} {{PARAMS.tcpdump}} -w {{PARAMS.pcaps_dir_container.rstrip('/')}}/zone-{{zone_id}}-client.pcap &"
                     ]
                 }
                 ,
@@ -1662,7 +1528,7 @@ def process_mcert_template (cmd_args):
                         "ip route add default dev {{PARAMS.nb_iface_container}} table 200",
                         "ip -4 route add local 14.2{{zone_id}}.51.0/24 dev lo",
                         "ip rule add from 14.2{{zone_id}}.51.0/24 table 200",
-                        "tcpdump -i {{PARAMS.nb_iface_container}} {{PARAMS.tcpdump}} -w {{PARAMS.result_dir_container}}/zone-{{zone_id}}-server/init.pcap &"
+                        "tcpdump -i {{PARAMS.nb_iface_container}} {{PARAMS.tcpdump}} -w {{PARAMS.pcaps_dir_container.rstrip('/')}}/zone-{{zone_id}}-server.pcap &"
                     ]
                 }
                 {{ "," if not loop.last }}
@@ -1672,52 +1538,6 @@ def process_mcert_template (cmd_args):
     ''')
 
     return tlspack_cfg.render(PARAMS = cmd_args)
-
-def process_mcert_stats(result_dir):
-    ev_sockstats_client_list = []
-    ev_sockstats_server_list = []
-
-    result_dir_contents = []
-    try:
-        result_dir_contents = os.listdir(result_dir)
-    except:
-        pass
-
-    for zone_dir in result_dir_contents:
-        zone_dir_path = os.path.join(result_dir, zone_dir)
-        if os.path.isdir(zone_dir_path):
-            ev_sockstats_json_file = os.path.join (zone_dir_path
-                                            , 'ev_sockstats.json')
-            try:
-                with open(ev_sockstats_json_file) as f:
-                    stats_j = json.load(f)
-                    if zone_dir.endswith('-client'):
-                        ev_sockstats_client_list.append (stats_j)
-                    if zone_dir.endswith('-server'):
-                        ev_sockstats_server_list.append (stats_j)
-            except:
-                ev_sockstats_client_list = []
-                ev_sockstats_server_list = []
-                break
-
-    if ev_sockstats_client_list:
-        ev_sockstats = ev_sockstats_client_list.pop()
-        while ev_sockstats_client_list:
-            next_ev_sockstats = ev_sockstats_client_list.pop()
-            for k, v in next_ev_sockstats.items():
-                ev_sockstats[k] += v
-        with open(os.path.join(result_dir, 'ev_sockstats_client.json'), 'w') as f:
-            json.dump(ev_sockstats, f)
-
-    if ev_sockstats_server_list:
-        ev_sockstats = ev_sockstats_server_list.pop()
-        while ev_sockstats_server_list:
-            next_ev_sockstats = ev_sockstats_server_list.pop()
-            for k, v in next_ev_sockstats.items():
-                ev_sockstats[k] += v
-        with open(os.path.join(result_dir, 'ev_sockstats_server.json'), 'w') as f:
-            json.dump(ev_sockstats, f)
-
 
 
 def get_arguments ():
@@ -1749,8 +1569,11 @@ def get_arguments ():
     status_parser = subparsers.add_parser('status', help='stop help')
     add_status_params (status_parser)
 
-    enter_parser = subparsers.add_parser('enter', help='clean help')
+    enter_parser = subparsers.add_parser('init', help='clean help')
     add_enter_params (enter_parser)
+
+    enter_parser = subparsers.add_parser('reinit', help='clean help')
+    add_reenter_params (enter_parser)
 
     exit_parser = subparsers.add_parser('exit', help='clean help')
     add_exit_params (exit_parser)
@@ -1768,10 +1591,9 @@ if __name__ == '__main__':
         print er
         sys.exit(1)
 
-    host_file = os.path.join (cmd_args.host_rundir, 'sys/host')
     try:
-        with open(host_file) as f:
-            host_info = json.load(f)
+        with open(cmd_args.node) as f:
+            node_info = json.load(f)
     except Exception as er:
         print er
         sys.exit(1)
@@ -1779,11 +1601,11 @@ if __name__ == '__main__':
 
     if cmd_args.cmd_name in ['cps', 'bw', 'tproxy', 'mcert']:
 
-        cmd_args.result_dir_container = os.path.join(cmd_args.target_rundir, 'traffic', cmd_args.runtag, 'result')
+        cmd_args.pcaps_dir_container = os.path.join(cmd_args.target_rundir, 'traffic', cmd_args.runtag, 'pcaps')
 
         if cmd_args.cmd_name in ['cps', 'bw', 'mcert']:
-            cmd_args.na_iface_container = host_info['net_iface_map'][cmd_args.na_iface]
-            cmd_args.nb_iface_container = host_info['net_iface_map'][cmd_args.nb_iface]
+            cmd_args.na_iface_container = filter (lambda n : n['host_iface'] == cmd_args.na_iface, node_info['networks'])[0]['container_iface']
+            cmd_args.nb_iface_container = filter (lambda n : n['host_iface'] == cmd_args.nb_iface, node_info['networks'])[0]['container_iface']
 
             cmd_args.cps = cmd_args.cps / cmd_args.zones
             cmd_args.max_active = cmd_args.max_active / cmd_args.zones
@@ -1803,8 +1625,8 @@ if __name__ == '__main__':
                         raise Exception ('unsupported cipher - ' + cmd_args.cipher)
 
         elif cmd_args.cmd_name in ['tproxy']:
-            cmd_args.ta_iface_container = host_info['net_iface_map'][cmd_args.ta_iface]
-            cmd_args.tb_iface_container = host_info['net_iface_map'][cmd_args.tb_iface]
+            cmd_args.ta_iface_container = filter (lambda n : n['host_iface'] == cmd_args.ta_iface, node_info['networks'])[0]['container_iface']
+            cmd_args.tb_iface_container = filter (lambda n : n['host_iface'] == cmd_args.tb_iface, node_info['networks'])[0]['container_iface']
 
         if cmd_args.cmd_name == 'cps':
             traffic_s = process_cps_template(cmd_args)
@@ -1815,48 +1637,22 @@ if __name__ == '__main__':
         elif cmd_args.cmd_name == 'mcert':
             traffic_s = process_mcert_template(cmd_args)
 
-        cfg_dir, result_dir = start_traffic(host_info, cmd_args, traffic_s)
-
-        try:
-            pid = os.fork()
-            if pid > 0:
-                sys.exit(0)
-        except Exception as er:
-            print er
-            sys.exit(1)
-        
-        devnull = open(os.devnull, 'w')
-        while True:
-            time.sleep (2)
-
-            subprocess.call(['rsync', '-av', '--delete'
-                                , cfg_dir.rstrip('/')
-                                , '/var/www/html/tmp']
-                                , stdout=devnull, stderr=devnull)
-            
-            if not is_traffic (cmd_args):
-                sys.exit(0)
-
-            if cmd_args.cmd_name == 'cps':
-                process_cps_stats (result_dir)
-            elif cmd_args.cmd_name == 'bw':
-                process_bw_stats (result_dir)
-            elif cmd_args.cmd_name == 'tproxy':
-                process_tproxy_stats (result_dir);
-            elif cmd_args.cmd_name == 'mcert':
-                process_mcert_stats (result_dir);
+        start_traffic(node_info, cmd_args, traffic_s)
 
     elif cmd_args.cmd_name == 'stop':
-        stop_traffic (host_info, cmd_args)
+        stop_traffic (node_info, cmd_args)
 
     elif cmd_args.cmd_name == 'status':
-        show_traffic (host_info, cmd_args)
+        show_traffic (node_info, cmd_args)
 
-    elif cmd_args.cmd_name == 'enter':
-        start_containers (host_info, cmd_args)
+    elif cmd_args.cmd_name == 'init':
+        start_containers (node_info, cmd_args)
+
+    elif cmd_args.cmd_name == 'reinit':
+        restart_containers (node_info, cmd_args)
 
     elif cmd_args.cmd_name == 'exit':
-        stop_containers (host_info, cmd_args)
+        stop_containers (node_info, cmd_args)
 
 
 
