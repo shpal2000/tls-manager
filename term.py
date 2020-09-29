@@ -564,12 +564,14 @@ def stop_containers(pod_info, c_args):
         cmd_str = "sudo docker rm -f {}".format (zone_cname)
         os.system (cmd_str)
 
+
 def restart_containers(pod_info, c_args):
     stop_containers(pod_info, c_args)
     start_containers(pod_info, c_args)
 
+                                
+def add_traffic_params (arg_parser):
 
-def add_common_params (arg_parser):
     arg_parser.add_argument('--sysinit'
                                 , action="store_true"
                                 , default=False
@@ -600,21 +602,10 @@ def add_common_params (arg_parser):
                                 , required=True
                                 , help = 'pod name')
 
-                                
-
-
-def add_common_start_params(arg_parser):
-
     arg_parser.add_argument('--runtag'
                                 , action="store"
                                 , required=True
                                 , help = 'run id')
-
-def add_traffic_params (arg_parser):
-
-    add_common_params (arg_parser)
-
-    add_common_start_params (arg_parser)
 
     arg_parser.add_argument('--na'
                                 , action="store"
@@ -758,12 +749,42 @@ def add_traffic_params (arg_parser):
                             , help = 'app_sc_starttls_len')
 
 
-
 def add_proxy_params (arg_parser):
 
-    add_common_params (arg_parser)
+    arg_parser.add_argument('--sysinit'
+                                , action="store_true"
+                                , default=False
+                                , help = 'sysinit')
 
-    add_common_start_params (arg_parser)
+    arg_parser.add_argument('--host_rundir'
+                                , action="store"
+                                , default='/root/rundir'
+                                , help = 'rundir path')
+
+    arg_parser.add_argument('--target_rundir'
+                                , action="store"
+                                , default='/rundir'
+                                , help = 'rundir path in container')
+
+    arg_parser.add_argument('--host_srcdir'
+                                , action="store"
+                                , default='/root/tcpdash'
+                                , help = 'host_srcdir')
+
+    arg_parser.add_argument('--target_srcdir'
+                                , action="store"
+                                , default='/root/tcpdash'
+                                , help = 'target_srcdir')
+
+    arg_parser.add_argument('--pod'
+                                , action="store"
+                                , required=True
+                                , help = 'pod name')
+
+    arg_parser.add_argument('--runtag'
+                                , action="store"
+                                , required=True
+                                , help = 'run id')
 
     arg_parser.add_argument('--proxy_traffic_vlan'
                                 , action="store"
@@ -833,12 +854,24 @@ def add_proxy_params (arg_parser):
                                 , help = '5 bytes'
                                 , default='02:42:ac:15:00')
 
+
 def add_stop_params (arg_parser):
-    add_common_params (arg_parser)
+
+    arg_parser.add_argument('--host_rundir'
+                                , action="store"
+                                , default='/root/rundir'
+                                , help = 'rundir path')
+
+    arg_parser.add_argument('--runtag'
+                                , action="store"
+                                , required=True
+                                , help = 'run id')
+
     arg_parser.add_argument('--force'
                                 , action="store_true"
                                 , default=False
                                 , help = '0/1')
+
 
 def zone_start_thread(pod_info, c_args, z_index):
 
@@ -856,7 +889,7 @@ def zone_start_thread(pod_info, c_args, z_index):
                     , headers={'Content-type': 'application/json', 'Accept': 'text/plain'})
 
 
-def start_traffic(pod_info, c_args, traffic_s):
+def start_run(c_args, traffic_s):
     registry_dir = os.path.join(c_args.host_rundir, 'registry')
 
     registry_dir_pod = os.path.join(registry_dir, 'pods', c_args.pod)
@@ -867,9 +900,12 @@ def start_traffic(pod_info, c_args, traffic_s):
     
     if os.path.exists(registry_file_run):
         with open (registry_file_run) as f:
-            registry_cfg_run = json.load(f)
-            print 'error: {} already running in pod {}'.format (c_args.runtag, registry_cfg_run['pod'])
+            registry_run_info = json.load(f)
+            print 'error: {} already running in pod {}'.format (c_args.runtag, registry_run_info['pod'])
             sys.exit(1)
+
+    with open(registry_file_pod) as f:
+        pod_info = json.load(f)
 
     if pod_info.get('runing'):
         print 'error: {} pod in use running {}'.format(c_args.pod, pod_info['runing'])
@@ -930,6 +966,7 @@ def start_traffic(pod_info, c_args, traffic_s):
                 thd.join()
             time.sleep(1) 
 
+
 def zone_stop_thread(pod_info, c_args, z_index):
 
     zone_cname = "{}-zone-{}".format (c_args.pod, z_index+1)
@@ -942,40 +979,33 @@ def zone_stop_thread(pod_info, c_args, z_index):
                     , headers={'Content-type': 'application/json', 'Accept': 'text/plain'})
 
 
-def stop_traffic(pod_info, c_args):
+def stop_run(pod_info, c_args):
 
     registry_dir = os.path.join(c_args.host_rundir, 'registry')
 
     registry_dir_pod = os.path.join(registry_dir, 'pods', c_args.pod)
     registry_file_pod = os.path.join(registry_dir_pod, 'config.json')
 
+    registry_dir_run = os.path.join(registry_dir, 'runs', c_args.runtag)
+    registry_file_run = os.path.join(registry_dir_run, 'config.json')
+
     if c_args.force:
-        restart_containers (pod_info, c_args)
-        pod_info['ready'] = 1
+        stop_containers (pod_info, c_args)
+        pod_info['ready'] = 0
         pod_info['runing'] = ''
         with open(registry_file_pod, 'w') as f:
             json.dump(pod_info, f)
+        os.system ( 'rm -rf {}'.format(registry_dir_run) )
+        sys.exit(1)
 
-        run_path = os.path.join(registry_dir, 'runs')
-        registry_dir_runs = [os.path.join(run_path, name) for name in os.listdir(run_path) 
-                                            if os.path.isdir(os.path.join(run_path, name))]
-
-        for registry_dir_run in registry_dir_runs:
-            os.system ( 'rm -rf {}'.format(registry_dir_run) )
-
+    # check if config runing
+    if not os.path.exists(registry_dir_run):
+        print 'test {} not running'.format(pod_info['runing'])
         sys.exit(1)
 
     if not pod_info.get('runing'):
         print 'no test running on pod {}'.format (c_args.pod)
         sys.exit(1)
-
-    registry_dir_run = os.path.join(registry_dir, 'runs', pod_info['runing'])
-    registry_file_run = os.path.join(registry_dir_run, 'config.json')
-
-    # check if config runing
-    if not os.path.exists(registry_dir_run):
-        print 'test {} not running'.format(pod_info['runing'])
-        sys.exit(1)    
 
     cfg_dir = os.path.join(c_args.host_rundir, 'traffic', pod_info['runing'])
     cfg_file = os.path.join(cfg_dir, 'config.json')
@@ -1017,7 +1047,8 @@ def add_cps_params (cmd_parser):
                                 , default=False
                                 , help = '0/1')
 
-def process_cps_template (cmd_args):
+
+def process_cps_template (c_args):
     tlspack_cfg = jinja2.Template('''
     {
         "tgen_app" : "cps",
@@ -1149,13 +1180,13 @@ def process_cps_template (cmd_args):
         ]
     }
     ''')
-    if cmd_args.ecdsa_cert:
-        cmd_args.server_cert = '/rundir/certs/server2.cert'
-        cmd_args.server_key = '/rundir/certs/server2.key'
+    if c_args.ecdsa_cert:
+        c_args.server_cert = '/rundir/certs/server2.cert'
+        c_args.server_key = '/rundir/certs/server2.key'
     else:
-        cmd_args.server_cert = '/rundir/certs/server.cert'
-        cmd_args.server_key = '/rundir/certs/server.key'
-    return tlspack_cfg.render(PARAMS = cmd_args)
+        c_args.server_cert = '/rundir/certs/server.cert'
+        c_args.server_key = '/rundir/certs/server.key'
+    return tlspack_cfg.render(PARAMS = c_args)
 
 
 def add_bw_params (cmd_parser):
@@ -1164,7 +1195,8 @@ def add_bw_params (cmd_parser):
                                 , default=False
                                 , help = '0/1')
 
-def process_bw_template (cmd_args):
+
+def process_bw_template (c_args):
 
     tlspack_cfg = jinja2.Template('''
     {
@@ -1295,19 +1327,20 @@ def process_bw_template (cmd_args):
     }
     ''')
 
-    if cmd_args.ecdsa_cert:
-        cmd_args.server_cert = '/rundir/certs/server2.cert'
-        cmd_args.server_key = '/rundir/certs/server2.key'
+    if c_args.ecdsa_cert:
+        c_args.server_cert = '/rundir/certs/server2.cert'
+        c_args.server_key = '/rundir/certs/server2.key'
     else:
-        cmd_args.server_cert = '/rundir/certs/server.cert'
-        cmd_args.server_key = '/rundir/certs/server.key'
-    return tlspack_cfg.render(PARAMS = cmd_args)
+        c_args.server_cert = '/rundir/certs/server.cert'
+        c_args.server_key = '/rundir/certs/server.key'
+    return tlspack_cfg.render(PARAMS = c_args)
 
 
 def add_tproxy_params (cmd_parser):
     pass
 
-def process_tproxy_template (cmd_args):
+
+def process_tproxy_template (c_args):
     tlspack_cfg = jinja2.Template ('''{
         "tgen_app" : "tproxy",
         "zones" : [
@@ -1383,15 +1416,14 @@ def process_tproxy_template (cmd_args):
     }
     ''')
 
-    return tlspack_cfg.render(PARAMS = cmd_args)
-
-
+    return tlspack_cfg.render(PARAMS = c_args)
 
 
 def add_mcert_params (cmd_parser):
     pass
 
-def process_mcert_template (cmd_args):
+
+def process_mcert_template (c_args):
     tlspack_cfg = jinja2.Template('''
     {
         "tgen_app" : "mcert",
@@ -1522,7 +1554,7 @@ def process_mcert_template (cmd_args):
     }
     ''')
 
-    return tlspack_cfg.render(PARAMS = cmd_args)
+    return tlspack_cfg.render(PARAMS = c_args)
 
 
 def get_arguments ():
@@ -1551,75 +1583,97 @@ def get_arguments ():
     stop_parser = subparsers.add_parser('stop', help='stop help')
     add_stop_params (stop_parser)
 
-    cmd_args = arg_parser.parse_args()
+    c_args = arg_parser.parse_args()
 
-    return cmd_args
+    return c_args
 
 
 if __name__ == '__main__':
 
     try:
-        cmd_args = get_arguments ()
+        c_args = get_arguments ()
     except Exception as er:
         print er
         sys.exit(1)
 
-    try:
-        with open(os.path.join (cmd_args.host_rundir
-                                , 'registry'
-                                , 'pods'
-                                , cmd_args.pod
-                                , 'config.json') ) as f:
-            pod_info = json.load(f)
-    except Exception as er:
-        print er
-        sys.exit(1)
+    if c_args.cmd_name in ['cps', 'bw', 'tproxy', 'mcert']:
 
+        try:
+            with open(os.path.join (c_args.host_rundir
+                                    , 'registry'
+                                    , 'pods'
+                                    , c_args.pod
+                                    , 'config.json') ) as f:
+                pod_info = json.load(f)
+        except Exception as er:
+            print 'invalid pod {}'.format (c_args.pod)
+            sys.exit(1)
 
-    if cmd_args.cmd_name in ['cps', 'bw', 'tproxy', 'mcert']:
+        c_args.pcaps_dir_container = os.path.join(c_args.target_rundir, 'traffic', c_args.runtag, 'pcaps')
 
-        cmd_args.pcaps_dir_container = os.path.join(cmd_args.target_rundir, 'traffic', cmd_args.runtag, 'pcaps')
+        if c_args.cmd_name in ['cps', 'bw', 'mcert']:
+            c_args.na_iface_container = filter (lambda n : n['host_iface'] == c_args.na_iface, pod_info['networks'])[0]['container_iface']
+            c_args.nb_iface_container = filter (lambda n : n['host_iface'] == c_args.nb_iface, pod_info['networks'])[0]['container_iface']
 
-        if cmd_args.cmd_name in ['cps', 'bw', 'mcert']:
-            cmd_args.na_iface_container = filter (lambda n : n['host_iface'] == cmd_args.na_iface, pod_info['networks'])[0]['container_iface']
-            cmd_args.nb_iface_container = filter (lambda n : n['host_iface'] == cmd_args.nb_iface, pod_info['networks'])[0]['container_iface']
+            c_args.traffic_paths = pod_info['containers']['count'] / 2
 
-            cmd_args.traffic_paths = pod_info['containers']['count'] / 2
-
-            cmd_args.cps = cmd_args.cps / cmd_args.traffic_paths
-            cmd_args.max_active = cmd_args.max_active / cmd_args.traffic_paths
-            cmd_args.max_pipeline = cmd_args.max_pipeline / cmd_args.traffic_paths
+            c_args.cps = c_args.cps / c_args.traffic_paths
+            c_args.max_active = c_args.max_active / c_args.traffic_paths
+            c_args.max_pipeline = c_args.max_pipeline / c_args.traffic_paths
 
 
             supported_cipher_names = map(lambda x : x['cipher_name']
                                                     , supported_ciphers)
 
-            if cmd_args.cmd_name == 'cipher':
-                selected_ciphers = map(lambda x : x.strip(), cmd_args.cipher.split(':'))
+            if c_args.cmd_name == 'cipher':
+                selected_ciphers = map(lambda x : x.strip(), c_args.cipher.split(':'))
                 for ciph in selected_ciphers:
                     if ciph not in supported_cipher_names:
                         raise Exception ('unsupported cipher - ' + ciph)
-            elif cmd_args.cmd_name == 'cps':
-                if cmd_args.cipher not in supported_cipher_names:
-                        raise Exception ('unsupported cipher - ' + cmd_args.cipher)
+            elif c_args.cmd_name == 'cps':
+                if c_args.cipher not in supported_cipher_names:
+                        raise Exception ('unsupported cipher - ' + c_args.cipher)
 
-        elif cmd_args.cmd_name in ['tproxy']:
-            cmd_args.ta_iface_container = filter (lambda n : n['host_iface'] == cmd_args.ta_iface, pod_info['networks'])[0]['container_iface']
-            cmd_args.tb_iface_container = filter (lambda n : n['host_iface'] == cmd_args.tb_iface, pod_info['networks'])[0]['container_iface']
+        elif c_args.cmd_name in ['tproxy']:
+            c_args.ta_iface_container = filter (lambda n : n['host_iface'] == c_args.ta_iface, pod_info['networks'])[0]['container_iface']
+            c_args.tb_iface_container = filter (lambda n : n['host_iface'] == c_args.tb_iface, pod_info['networks'])[0]['container_iface']
 
-        if cmd_args.cmd_name == 'cps':
-            traffic_s = process_cps_template(cmd_args)
-        elif cmd_args.cmd_name == 'bw':
-            traffic_s = process_bw_template(cmd_args)
-        elif cmd_args.cmd_name == 'tproxy':
-            traffic_s = process_tproxy_template(cmd_args)
-        elif cmd_args.cmd_name == 'mcert':
-            traffic_s = process_mcert_template(cmd_args)
+        if c_args.cmd_name == 'cps':
+            traffic_s = process_cps_template(c_args)
+        elif c_args.cmd_name == 'bw':
+            traffic_s = process_bw_template(c_args)
+        elif c_args.cmd_name == 'tproxy':
+            traffic_s = process_tproxy_template(c_args)
+        elif c_args.cmd_name == 'mcert':
+            traffic_s = process_mcert_template(c_args)
 
-        start_traffic(pod_info, cmd_args, traffic_s)
+        start_run(c_args, traffic_s)
 
-    elif cmd_args.cmd_name == 'stop':
-        stop_traffic (pod_info, cmd_args)
+    elif c_args.cmd_name == 'stop':
+        try:
+            with open(os.path.join (c_args.host_rundir
+                                    , 'registry'
+                                    , 'runs'
+                                    , c_args.runtag
+                                    , 'config.json') ) as f:
+                runs_info = json.load(f)
+        except Exception as er:
+            print 'invalid runtag {}'.format(c_args.runtag)
+            sys.exit(1)
 
+        c_args.pod = runs_info['pod']
+
+        try:
+            with open(os.path.join (c_args.host_rundir
+                                    , 'registry'
+                                    , 'pods'
+                                    , c_args.pod
+                                    , 'config.json') ) as f:
+                pod_info = json.load(f)
+        except Exception as er:
+            print 'invalid pod {}'.format (c_args.pod)
+            sys.exit(1)
+
+        stop_run (pod_info, c_args)
 
 
