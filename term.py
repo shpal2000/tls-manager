@@ -520,20 +520,20 @@ supported_ciphers = [
 ]
 
 
-def start_containers(node_info, c_args):
+def start_containers(pod_info, c_args):
     rundir_map = "--volume={}:{}".format (c_args.host_rundir
                                                 , c_args.target_rundir)
 
     srcdir_map = "--volume={}:{}".format (c_args.host_srcdir
                                                 , c_args.target_srcdir)
 
-    for z_index in range(node_info['cores']):
-        zone_cname = "tp-zone-{}".format (z_index+1)
+    for z_index in range( pod_info['containers']['count'] ):
+        zone_cname = "{}-zone-{}".format (c_args.pod, z_index+1)
 
         cmd_str = "sudo docker run --cap-add=SYS_PTRACE --security-opt seccomp=unconfined --network=bridge --privileged --name {} -it -d {} {} tlspack/tgen:latest /bin/bash".format (zone_cname, rundir_map, srcdir_map)
         os.system (cmd_str)
 
-        for network in node_info['networks']:
+        for network in pod_info['networks']:
             host_iface = network['host_iface']
             host_macvlan = network['host_macvlan']
             cmd_str = "sudo ip link set dev {} up".format(host_iface)
@@ -558,15 +558,15 @@ def start_containers(node_info, c_args):
         os.system (cmd_str)
 
 
-def stop_containers(node_info, c_args):
-    for z_index in range(node_info['cores']):
-        zone_cname = "tp-zone-{}".format (z_index+1)
+def stop_containers(pod_info, c_args):
+    for z_index in range( pod_info['containers']['count'] ):
+        zone_cname = "{}-zone-{}".format (c_args.pod, z_index+1)
         cmd_str = "sudo docker rm -f {}".format (zone_cname)
         os.system (cmd_str)
 
-def restart_containers(node_info, c_args):
-    stop_containers(node_info, c_args)
-    start_containers(node_info, c_args)
+def restart_containers(pod_info, c_args):
+    stop_containers(pod_info, c_args)
+    start_containers(pod_info, c_args)
 
 
 def add_common_params (arg_parser):
@@ -595,10 +595,10 @@ def add_common_params (arg_parser):
                                 , default='/root/tcpdash'
                                 , help = 'target_srcdir')
 
-    arg_parser.add_argument('--node'
+    arg_parser.add_argument('--pod'
                                 , action="store"
-                                , default='./node.json'
-                                , help = 'node file')
+                                , required=True
+                                , help = 'pod name')
 
                                 
 
@@ -627,12 +627,6 @@ def add_traffic_params (arg_parser):
                                 , required=True
                                 , dest='nb_iface'
                                 , help = 'nb_iface name')
-
-    arg_parser.add_argument('--zones'
-                                , action="store"
-                                , type=int
-                                , default=1
-                                , help = 'zones ')
 
     arg_parser.add_argument('--cps'
                                 , action="store"
@@ -841,22 +835,14 @@ def add_proxy_params (arg_parser):
 
 def add_stop_params (arg_parser):
     add_common_params (arg_parser)
+    arg_parser.add_argument('--force'
+                                , action="store_true"
+                                , default=False
+                                , help = '0/1')
 
-def add_status_params(arg_parser):
-    add_common_params (arg_parser)
+def zone_start_thread(pod_info, c_args, z_index):
 
-def add_enter_params (arg_parser):
-    add_common_params (arg_parser)
-
-def add_reenter_params (arg_parser):
-    add_common_params (arg_parser)
-
-def add_exit_params (arg_parser):
-    add_common_params (arg_parser)
-
-def zone_start_thread(node_info, c_args, z_index):
-
-    zone_cname = "tp-zone-{}".format (z_index+1)
+    zone_cname = "{}-zone-{}".format (c_args.pod, z_index+1)
 
     cmd_str = "docker inspect --format='{{.NetworkSettings.IPAddress}}' " + zone_cname
     zone_ipaddr = subprocess.check_output(cmd_str, shell=True, close_fds=True).strip()
@@ -866,27 +852,27 @@ def zone_start_thread(node_info, c_args, z_index):
     requests.post('http://{}:8081/start'.format(zone_ipaddr)
                     , data = json.dumps({'cfg_file':'/rundir/traffic/cps1/config.json'
                                         , 'z_index' : z_index
-                                        , 'net_ifaces' : map (lambda n : n['container_iface'], node_info['networks']) })
+                                        , 'net_ifaces' : map (lambda n : n['container_iface'], pod_info['networks']) })
                     , headers={'Content-type': 'application/json', 'Accept': 'text/plain'})
 
 
-def start_traffic(node_info, c_args, traffic_s):
-    registry_dir = os.path.join(c_args.host_rundir, 'registry', 'one-app-mode')
-    registry_file = os.path.join(registry_dir, 'tag.txt')
+def start_traffic(pod_info, c_args, traffic_s):
+    registry_dir = os.path.join(c_args.host_rundir, 'registry')
 
-    if c_args.sysinit:
-        restart_containers (node_info, c_args)
-        os.system ("rm -rf {}".format (registry_dir))
+    registry_dir_pod = os.path.join(registry_dir, 'pods', c_args.pod)
+    registry_file_pod = os.path.join(registry_dir_pod, 'config.json')
 
-    # check if config runing
-    if os.path.exists(registry_file):
-        with open (registry_file) as f:
-            testname = f.read()
+    registry_dir_run = os.path.join(registry_dir, 'runs', c_args.runtag)
+    registry_file_run = os.path.join(registry_dir_run, 'config.json')
+    
+    if os.path.exists(registry_file_run):
+        with open (registry_file_run) as f:
+            registry_cfg_run = json.load(f)
+            print 'error: {} already running in pod {}'.format (c_args.runtag, registry_cfg_run['pod'])
+            sys.exit(1)
 
-        if testname == c_args.runtag:
-            print 'error: {} already running'.format (testname)
-        else:
-            print 'error: {} running'.format (testname)
+    if pod_info.get('runing'):
+        print 'error: {} pod in use running {}'.format(c_args.pod, pod_info['runing'])
         sys.exit(1)
 
     # create config dir; file
@@ -909,30 +895,21 @@ def start_traffic(node_info, c_args, traffic_s):
     with open(cfg_file, 'w') as f:
         f.write(traffic_s)
 
+    if c_args.sysinit or not pod_info.get('ready', 0):
+        restart_containers (pod_info, c_args)
+        pod_info['ready'] = 1
+        time.sleep (5)
+
+    pod_info['runing'] = c_args.runtag
+
     # create registry entries
-    os.system ('mkdir -p {}'.format(registry_dir))
+    os.system ('mkdir -p {}'.format(registry_dir_run))
 
-    with open(registry_file, 'w') as f:
-        f.write(c_args.runtag)
+    with open(registry_file_run, 'w') as f:
+        json.dump({'pod' : c_args.pod}, f)
 
-    for zone in cfg_j['zones']:
-        if not zone['enable']:
-            continue
-        is_app_enable = False
-        for app in zone['app_list']:
-            if app['enable']:
-                is_app_enable = True;
-                break
-        if not is_app_enable:
-            continue
-    
-        zone_file = os.path.join(registry_dir, zone['zone_label'])  
-        with open(zone_file, 'w') as f:
-            f.write('0')
-    
-    master_file = os.path.join(registry_dir, 'master')
-    with open(master_file, 'w') as f:
-        f.write('0')  
+    with open(registry_file_pod, 'w') as f:
+        json.dump(pod_info, f)
 
     for next_step in range(1, 3):
         z_threads = []
@@ -944,7 +921,7 @@ def start_traffic(node_info, c_args, traffic_s):
                 continue
 
             if zone.get('step', 1) == next_step:
-                thd = Thread(target=zone_start_thread, args=[node_info, c_args, z_index])
+                thd = Thread(target=zone_start_thread, args=[pod_info, c_args, z_index])
                 thd.daemon = True
                 thd.start()
                 z_threads.append(thd)
@@ -953,9 +930,9 @@ def start_traffic(node_info, c_args, traffic_s):
                 thd.join()
             time.sleep(1) 
 
-def zone_stop_thread(node_info, c_args, z_index):
+def zone_stop_thread(pod_info, c_args, z_index):
 
-    zone_cname = "tp-zone-{}".format (z_index+1)
+    zone_cname = "{}-zone-{}".format (c_args.pod, z_index+1)
 
     cmd_str = "docker inspect --format='{{.NetworkSettings.IPAddress}}' " + zone_cname
     zone_ipaddr = subprocess.check_output(cmd_str, shell=True, close_fds=True).strip()
@@ -965,24 +942,42 @@ def zone_stop_thread(node_info, c_args, z_index):
                     , headers={'Content-type': 'application/json', 'Accept': 'text/plain'})
 
 
-def stop_traffic(node_info, c_args):
-    registry_dir = os.path.join(c_args.host_rundir, 'registry', 'one-app-mode')
-    registry_file = os.path.join(registry_dir, 'tag.txt')
+def stop_traffic(pod_info, c_args):
 
-    if c_args.sysinit:
-        restart_containers (node_info, c_args)
-        os.system ("rm -rf {}".format (registry_dir))
-        return
+    registry_dir = os.path.join(c_args.host_rundir, 'registry')
+
+    registry_dir_pod = os.path.join(registry_dir, 'pods', c_args.pod)
+    registry_file_pod = os.path.join(registry_dir_pod, 'config.json')
+
+    if c_args.force:
+        restart_containers (pod_info, c_args)
+        pod_info['ready'] = 1
+        pod_info['runing'] = ''
+        with open(registry_file_pod, 'w') as f:
+            json.dump(pod_info, f)
+
+        run_path = os.path.join(registry_dir, 'runs')
+        registry_dir_runs = [os.path.join(run_path, name) for name in os.listdir(run_path) 
+                                            if os.path.isdir(os.path.join(run_path, name))]
+
+        for registry_dir_run in registry_dir_runs:
+            os.system ( 'rm -rf {}'.format(registry_dir_run) )
+
+        sys.exit(1)
+
+    if not pod_info.get('runing'):
+        print 'no test running on pod {}'.format (c_args.pod)
+        sys.exit(1)
+
+    registry_dir_run = os.path.join(registry_dir, 'runs', pod_info['runing'])
+    registry_file_run = os.path.join(registry_dir_run, 'config.json')
 
     # check if config runing
-    if not os.path.exists(registry_file):
-        print 'no test running'
+    if not os.path.exists(registry_dir_run):
+        print 'test {} not running'.format(pod_info['runing'])
         sys.exit(1)    
 
-    with open (registry_file) as f:
-        c_args.runtag = f.read()
-
-    cfg_dir = os.path.join(c_args.host_rundir, 'traffic', c_args.runtag)
+    cfg_dir = os.path.join(c_args.host_rundir, 'traffic', pod_info['runing'])
     cfg_file = os.path.join(cfg_dir, 'config.json')
 
     try:
@@ -1001,7 +996,7 @@ def stop_traffic(node_info, c_args):
         if not zone['enable']:
             continue
 
-        thd = Thread(target=zone_stop_thread, args=[node_info, c_args, z_index])
+        thd = Thread(target=zone_stop_thread, args=[pod_info, c_args, z_index])
         thd.daemon = True
         thd.start()
         z_threads.append(thd)
@@ -1009,21 +1004,11 @@ def stop_traffic(node_info, c_args):
     for thd in z_threads:
         thd.join()
 
-    os.system ("rm -rf {}".format (registry_dir))
-
-def show_traffic (node_info, c_args):
-    registry_dir = os.path.join(c_args.host_rundir, 'registry', 'one-app-mode')
-    registry_file = os.path.join(registry_dir, 'tag.txt')
-
-    # check if config runing
-    if os.path.exists(registry_file):
-        with open (registry_file) as f:
-            testname = f.read()
-        print '{} running'.format (testname)
-    else:
-        print 'no test running'
-
-
+    os.system ("rm -rf {}".format (registry_dir_run))
+    pod_info['ready'] = 1
+    pod_info['runing'] = ''
+    with open(registry_file_pod, 'w') as f:
+        json.dump(pod_info, f)
 
 
 def add_cps_params (cmd_parser):
@@ -1038,9 +1023,9 @@ def process_cps_template (cmd_args):
         "tgen_app" : "cps",
         "zones" : [
             {% set ns = namespace(cs_grp_count=0, srv_count=0) %}
-            {%- for zone_id in range(1, PARAMS.zones+1) %}
+            {%- for traffic_id in range(1, PARAMS.traffic_paths+1) %}
                 {
-                    "zone_label" : "zone-{{zone_id}}-client",
+                    "zone_label" : "zone-{{traffic_id}}-client",
                     "enable" : 1,
                     "step" : 2,
                     "app_list" : [
@@ -1065,10 +1050,10 @@ def process_cps_template (cmd_args):
                                         {
                                             "cs_grp_label" : "cs_grp_{{loop.index}}",
                                             "enable" : 1,
-                                            "srv_ip"   : "14.2{{zone_id}}.51.{{loop.index}}",
+                                            "srv_ip"   : "14.2{{traffic_id}}.51.{{loop.index}}",
                                             "srv_port" : 443,
-                                            "clnt_ip_begin" : "12.2{{zone_id}}.51.{{1+loop.index0*10}}",
-                                            "clnt_ip_end" : "12.2{{zone_id}}.51.{{loop.index*10}}",
+                                            "clnt_ip_begin" : "12.2{{traffic_id}}.51.{{1+loop.index0*10}}",
+                                            "clnt_ip_end" : "12.2{{traffic_id}}.51.{{loop.index*10}}",
                                             "clnt_port_begin" : {{PARAMS.port_begin}},
                                             "clnt_port_end" : 65000,
                                             "cipher" : "{{PARAMS.cipher}}",
@@ -1093,16 +1078,16 @@ def process_cps_template (cmd_args):
 
                     "zone_cmds" : [
                         "ip link set dev {{PARAMS.na_iface_container}} up",
-                        "ifconfig {{PARAMS.na_iface_container}} hw ether {{PARAMS.client_mac_seed}}:{{'{:02x}'.format(zone_id)}}",
+                        "ifconfig {{PARAMS.na_iface_container}} hw ether {{PARAMS.client_mac_seed}}:{{'{:02x}'.format(traffic_id)}}",
                         "ip route add default dev {{PARAMS.na_iface_container}} table 200",
-                        "ip -4 route add local 12.2{{zone_id}}.51.0/24 dev lo",
-                        "ip rule add from 12.2{{zone_id}}.51.0/24 table 200",
-                        "tcpdump -i {{PARAMS.na_iface_container}} {{PARAMS.tcpdump}} -w {{PARAMS.pcaps_dir_container.rstrip('/')}}/zone-{{zone_id}}-client.pcap &"
+                        "ip -4 route add local 12.2{{traffic_id}}.51.0/24 dev lo",
+                        "ip rule add from 12.2{{traffic_id}}.51.0/24 table 200",
+                        "tcpdump -i {{PARAMS.na_iface_container}} {{PARAMS.tcpdump}} -w {{PARAMS.pcaps_dir_container.rstrip('/')}}/zone-{{traffic_id}}-client.pcap &"
                     ]
                 }
                 ,
                 {
-                    "zone_label" : "zone-{{zone_id}}-server",
+                    "zone_label" : "zone-{{traffic_id}}-server",
                     "enable" : 1,
                     "step" : 1,
                     "app_list" : [
@@ -1124,9 +1109,9 @@ def process_cps_template (cmd_args):
                                             "srv_label" : "srv_{{loop.index}}",
                                             "enable" : 1,
                                             "emulation_id" : 0,
-                                            "begin_cert_index" : {{zone_id*2000}},
+                                            "begin_cert_index" : {{traffic_id*2000}},
                                             "end_cert_index" : 100000, 
-                                            "srv_ip" : "14.2{{zone_id}}.51.{{loop.index}}",
+                                            "srv_ip" : "14.2{{traffic_id}}.51.{{loop.index}}",
                                             "srv_port" : 443,
                                             "srv_cert" : "{{PARAMS.server_cert}}",
                                             "srv_key" : "{{PARAMS.server_key}}",
@@ -1152,11 +1137,11 @@ def process_cps_template (cmd_args):
 
                     "zone_cmds" : [
                         "ip link set dev {{PARAMS.nb_iface_container}} up",
-                        "ifconfig {{PARAMS.nb_iface_container}} hw ether {{PARAMS.server_mac_seed}}:{{'{:02x}'.format(zone_id)}}",
+                        "ifconfig {{PARAMS.nb_iface_container}} hw ether {{PARAMS.server_mac_seed}}:{{'{:02x}'.format(traffic_id)}}",
                         "ip route add default dev {{PARAMS.nb_iface_container}} table 200",
-                        "ip -4 route add local 14.2{{zone_id}}.51.0/24 dev lo",
-                        "ip rule add from 14.2{{zone_id}}.51.0/24 table 200",
-                        "tcpdump -i {{PARAMS.nb_iface_container}} {{PARAMS.tcpdump}} -w {{PARAMS.pcaps_dir_container.rstrip('/')}}/zone-{{zone_id}}-server.pcap &"
+                        "ip -4 route add local 14.2{{traffic_id}}.51.0/24 dev lo",
+                        "ip rule add from 14.2{{traffic_id}}.51.0/24 table 200",
+                        "tcpdump -i {{PARAMS.nb_iface_container}} {{PARAMS.tcpdump}} -w {{PARAMS.pcaps_dir_container.rstrip('/')}}/zone-{{traffic_id}}-server.pcap &"
                     ]
                 }
                 {{ "," if not loop.last }}
@@ -1186,9 +1171,9 @@ def process_bw_template (cmd_args):
         "tgen_app" : "bw",
         "zones" : [
             {% set ns = namespace(cs_grp_count=0, srv_count=0) %}
-            {%- for zone_id in range(1, PARAMS.zones+1) %}
+            {%- for traffic_id in range(1, PARAMS.traffic_paths+1) %}
                 {
-                    "zone_label" : "zone-{{zone_id}}-client",
+                    "zone_label" : "zone-{{traffic_id}}-client",
                     "enable" : 1,
 
                     "app_list" : [
@@ -1213,10 +1198,10 @@ def process_bw_template (cmd_args):
                                         {
                                             "cs_grp_label" : "cs_grp_{{loop.index}}",
                                             "enable" : 1,
-                                            "srv_ip"   : "24.2{{zone_id}}.51.{{loop.index}}",
+                                            "srv_ip"   : "24.2{{traffic_id}}.51.{{loop.index}}",
                                             "srv_port" : 443,
-                                            "clnt_ip_begin" : "22.2{{zone_id}}.51.{{1+loop.index0*10}}",
-                                            "clnt_ip_end" : "22.2{{zone_id}}.51.{{loop.index*10}}",
+                                            "clnt_ip_begin" : "22.2{{traffic_id}}.51.{{1+loop.index0*10}}",
+                                            "clnt_ip_end" : "22.2{{traffic_id}}.51.{{loop.index*10}}",
                                             "clnt_port_begin" : {{PARAMS.port_begin}},
                                             "clnt_port_end" : 65000,
                                             "cipher" : "{{PARAMS.cipher}}",
@@ -1241,16 +1226,16 @@ def process_bw_template (cmd_args):
 
                     "zone_cmds" : [
                         "ip link set dev {{PARAMS.na_iface_container}} up",
-                        "ifconfig {{PARAMS.na_iface_container}} hw ether {{PARAMS.client_mac_seed}}:{{'{:02x}'.format(zone_id)}}",
+                        "ifconfig {{PARAMS.na_iface_container}} hw ether {{PARAMS.client_mac_seed}}:{{'{:02x}'.format(traffic_id)}}",
                         "ip route add default dev {{PARAMS.na_iface_container}} table 200",
-                        "ip -4 route add local 22.2{{zone_id}}.51.0/24 dev lo",
-                        "ip rule add from 22.2{{zone_id}}.51.0/24 table 200",
-                        "tcpdump -i {{PARAMS.na_iface_container}} {{PARAMS.tcpdump}} -w {{PARAMS.pcaps_dir_container.rstrip('/')}}/zone-{{zone_id}}-client.pcap &"
+                        "ip -4 route add local 22.2{{traffic_id}}.51.0/24 dev lo",
+                        "ip rule add from 22.2{{traffic_id}}.51.0/24 table 200",
+                        "tcpdump -i {{PARAMS.na_iface_container}} {{PARAMS.tcpdump}} -w {{PARAMS.pcaps_dir_container.rstrip('/')}}/zone-{{traffic_id}}-client.pcap &"
                     ]                    
                 }
                 ,
                 {
-                    "zone_label" : "zone-{{zone_id}}-server",
+                    "zone_label" : "zone-{{traffic_id}}-server",
                     "enable" : 1,
 
                     "app_list" : [
@@ -1271,7 +1256,7 @@ def process_bw_template (cmd_args):
                                         {
                                             "srv_label" : "srv_{{loop.index}}",
                                             "enable" : 1,
-                                            "srv_ip" : "24.2{{zone_id}}.51.{{loop.index}}",
+                                            "srv_ip" : "24.2{{traffic_id}}.51.{{loop.index}}",
                                             "srv_port" : 443,
                                             "srv_cert" : "{{PARAMS.server_cert}}",
                                             "srv_key" : "{{PARAMS.server_key}}",
@@ -1297,11 +1282,11 @@ def process_bw_template (cmd_args):
 
                     "zone_cmds" : [
                         "ip link set dev {{PARAMS.nb_iface_container}} up",
-                        "ifconfig {{PARAMS.nb_iface_container}} hw ether {{PARAMS.server_mac_seed}}:{{'{:02x}'.format(zone_id)}}",
+                        "ifconfig {{PARAMS.nb_iface_container}} hw ether {{PARAMS.server_mac_seed}}:{{'{:02x}'.format(traffic_id)}}",
                         "ip route add default dev {{PARAMS.nb_iface_container}} table 200",
-                        "ip -4 route add local 24.2{{zone_id}}.51.0/24 dev lo",
-                        "ip rule add from 24.2{{zone_id}}.51.0/24 table 200",
-                        "tcpdump -i {{PARAMS.nb_iface_container}} {{PARAMS.tcpdump}} -w {{PARAMS.pcaps_dir_container.rstrip('/')}}/zone-{{zone_id}}-server.pcap &"
+                        "ip -4 route add local 24.2{{traffic_id}}.51.0/24 dev lo",
+                        "ip rule add from 24.2{{traffic_id}}.51.0/24 table 200",
+                        "tcpdump -i {{PARAMS.nb_iface_container}} {{PARAMS.tcpdump}} -w {{PARAMS.pcaps_dir_container.rstrip('/')}}/zone-{{traffic_id}}-server.pcap &"
                     ]
                 }
                 {{ "," if not loop.last }}
@@ -1412,9 +1397,9 @@ def process_mcert_template (cmd_args):
         "tgen_app" : "mcert",
         "zones" : [
             {% set ns = namespace(cs_grp_count=0, srv_count=0) %}
-            {%- for zone_id in range(1, PARAMS.zones+1) %}
+            {%- for traffic_id in range(1, PARAMS.traffic_paths+1) %}
                 {
-                    "zone_label" : "zone-{{zone_id}}-client",
+                    "zone_label" : "zone-{{traffic_id}}-client",
                     "enable" : 1,
                     "app_list" : [
                         {
@@ -1438,10 +1423,10 @@ def process_mcert_template (cmd_args):
                                         {
                                             "cs_grp_label" : "cs_grp_{{loop.index}}",
                                             "enable" : 1,
-                                            "srv_ip"   : "14.2{{zone_id}}.51.{{loop.index}}",
+                                            "srv_ip"   : "14.2{{traffic_id}}.51.{{loop.index}}",
                                             "srv_port" : 443,
-                                            "clnt_ip_begin" : "12.2{{zone_id}}.51.{{1+loop.index0*10}}",
-                                            "clnt_ip_end" : "12.2{{zone_id}}.51.{{loop.index*10}}",
+                                            "clnt_ip_begin" : "12.2{{traffic_id}}.51.{{1+loop.index0*10}}",
+                                            "clnt_ip_end" : "12.2{{traffic_id}}.51.{{loop.index*10}}",
                                             "clnt_port_begin" : {{PARAMS.port_begin}},
                                             "clnt_port_end" : 65000,
                                             "cipher" : "{{PARAMS.cipher}}",
@@ -1466,16 +1451,16 @@ def process_mcert_template (cmd_args):
 
                     "zone_cmds" : [
                         "ip link set dev {{PARAMS.na_iface_container}} up",
-                        "ifconfig {{PARAMS.na_iface_container}} hw ether {{PARAMS.client_mac_seed}}:{{'{:02x}'.format(zone_id)}}",
+                        "ifconfig {{PARAMS.na_iface_container}} hw ether {{PARAMS.client_mac_seed}}:{{'{:02x}'.format(traffic_id)}}",
                         "ip route add default dev {{PARAMS.na_iface_container}} table 200",
-                        "ip -4 route add local 12.2{{zone_id}}.51.0/24 dev lo",
-                        "ip rule add from 12.2{{zone_id}}.51.0/24 table 200",
-                        "tcpdump -i {{PARAMS.na_iface_container}} {{PARAMS.tcpdump}} -w {{PARAMS.pcaps_dir_container.rstrip('/')}}/zone-{{zone_id}}-client.pcap &"
+                        "ip -4 route add local 12.2{{traffic_id}}.51.0/24 dev lo",
+                        "ip rule add from 12.2{{traffic_id}}.51.0/24 table 200",
+                        "tcpdump -i {{PARAMS.na_iface_container}} {{PARAMS.tcpdump}} -w {{PARAMS.pcaps_dir_container.rstrip('/')}}/zone-{{traffic_id}}-client.pcap &"
                     ]
                 }
                 ,
                 {
-                    "zone_label" : "zone-{{zone_id}}-server",
+                    "zone_label" : "zone-{{traffic_id}}-server",
                     "enable" : 1,
                     "iface" : "{{PARAMS.iface_container}}",
                     "tcpdump" : "{{PARAMS.tcpdump}}",
@@ -1498,7 +1483,7 @@ def process_mcert_template (cmd_args):
                                             "srv_label" : "srv_{{loop.index}}",
                                             "enable" : 1,
                                             "emulation_id" : 0,
-                                            "srv_ip" : "14.2{{zone_id}}.51.{{loop.index}}",
+                                            "srv_ip" : "14.2{{traffic_id}}.51.{{loop.index}}",
                                             "srv_port" : 443,
                                             "srv_cert" : "{{PARAMS.server_cert}}",
                                             "srv_key" : "{{PARAMS.server_key}}",
@@ -1524,11 +1509,11 @@ def process_mcert_template (cmd_args):
 
                     "zone_cmds" : [
                         "ip link set dev {{PARAMS.nb_iface_container}} up",
-                        "ifconfig {{PARAMS.nb_iface_container}} hw ether {{PARAMS.server_mac_seed}}:{{'{:02x}'.format(zone_id)}}",
+                        "ifconfig {{PARAMS.nb_iface_container}} hw ether {{PARAMS.server_mac_seed}}:{{'{:02x}'.format(traffic_id)}}",
                         "ip route add default dev {{PARAMS.nb_iface_container}} table 200",
-                        "ip -4 route add local 14.2{{zone_id}}.51.0/24 dev lo",
-                        "ip rule add from 14.2{{zone_id}}.51.0/24 table 200",
-                        "tcpdump -i {{PARAMS.nb_iface_container}} {{PARAMS.tcpdump}} -w {{PARAMS.pcaps_dir_container.rstrip('/')}}/zone-{{zone_id}}-server.pcap &"
+                        "ip -4 route add local 14.2{{traffic_id}}.51.0/24 dev lo",
+                        "ip rule add from 14.2{{traffic_id}}.51.0/24 table 200",
+                        "tcpdump -i {{PARAMS.nb_iface_container}} {{PARAMS.tcpdump}} -w {{PARAMS.pcaps_dir_container.rstrip('/')}}/zone-{{traffic_id}}-server.pcap &"
                     ]
                 }
                 {{ "," if not loop.last }}
@@ -1566,18 +1551,6 @@ def get_arguments ():
     stop_parser = subparsers.add_parser('stop', help='stop help')
     add_stop_params (stop_parser)
 
-    status_parser = subparsers.add_parser('status', help='stop help')
-    add_status_params (status_parser)
-
-    enter_parser = subparsers.add_parser('init', help='clean help')
-    add_enter_params (enter_parser)
-
-    enter_parser = subparsers.add_parser('reinit', help='clean help')
-    add_reenter_params (enter_parser)
-
-    exit_parser = subparsers.add_parser('exit', help='clean help')
-    add_exit_params (exit_parser)
-
     cmd_args = arg_parser.parse_args()
 
     return cmd_args
@@ -1592,8 +1565,12 @@ if __name__ == '__main__':
         sys.exit(1)
 
     try:
-        with open(cmd_args.node) as f:
-            node_info = json.load(f)
+        with open(os.path.join (cmd_args.host_rundir
+                                , 'registry'
+                                , 'pods'
+                                , cmd_args.pod
+                                , 'config.json') ) as f:
+            pod_info = json.load(f)
     except Exception as er:
         print er
         sys.exit(1)
@@ -1604,12 +1581,14 @@ if __name__ == '__main__':
         cmd_args.pcaps_dir_container = os.path.join(cmd_args.target_rundir, 'traffic', cmd_args.runtag, 'pcaps')
 
         if cmd_args.cmd_name in ['cps', 'bw', 'mcert']:
-            cmd_args.na_iface_container = filter (lambda n : n['host_iface'] == cmd_args.na_iface, node_info['networks'])[0]['container_iface']
-            cmd_args.nb_iface_container = filter (lambda n : n['host_iface'] == cmd_args.nb_iface, node_info['networks'])[0]['container_iface']
+            cmd_args.na_iface_container = filter (lambda n : n['host_iface'] == cmd_args.na_iface, pod_info['networks'])[0]['container_iface']
+            cmd_args.nb_iface_container = filter (lambda n : n['host_iface'] == cmd_args.nb_iface, pod_info['networks'])[0]['container_iface']
 
-            cmd_args.cps = cmd_args.cps / cmd_args.zones
-            cmd_args.max_active = cmd_args.max_active / cmd_args.zones
-            cmd_args.max_pipeline = cmd_args.max_pipeline / cmd_args.zones
+            cmd_args.traffic_paths = pod_info['containers']['count'] / 2
+
+            cmd_args.cps = cmd_args.cps / cmd_args.traffic_paths
+            cmd_args.max_active = cmd_args.max_active / cmd_args.traffic_paths
+            cmd_args.max_pipeline = cmd_args.max_pipeline / cmd_args.traffic_paths
 
 
             supported_cipher_names = map(lambda x : x['cipher_name']
@@ -1625,8 +1604,8 @@ if __name__ == '__main__':
                         raise Exception ('unsupported cipher - ' + cmd_args.cipher)
 
         elif cmd_args.cmd_name in ['tproxy']:
-            cmd_args.ta_iface_container = filter (lambda n : n['host_iface'] == cmd_args.ta_iface, node_info['networks'])[0]['container_iface']
-            cmd_args.tb_iface_container = filter (lambda n : n['host_iface'] == cmd_args.tb_iface, node_info['networks'])[0]['container_iface']
+            cmd_args.ta_iface_container = filter (lambda n : n['host_iface'] == cmd_args.ta_iface, pod_info['networks'])[0]['container_iface']
+            cmd_args.tb_iface_container = filter (lambda n : n['host_iface'] == cmd_args.tb_iface, pod_info['networks'])[0]['container_iface']
 
         if cmd_args.cmd_name == 'cps':
             traffic_s = process_cps_template(cmd_args)
@@ -1637,22 +1616,10 @@ if __name__ == '__main__':
         elif cmd_args.cmd_name == 'mcert':
             traffic_s = process_mcert_template(cmd_args)
 
-        start_traffic(node_info, cmd_args, traffic_s)
+        start_traffic(pod_info, cmd_args, traffic_s)
 
     elif cmd_args.cmd_name == 'stop':
-        stop_traffic (node_info, cmd_args)
-
-    elif cmd_args.cmd_name == 'status':
-        show_traffic (node_info, cmd_args)
-
-    elif cmd_args.cmd_name == 'init':
-        start_containers (node_info, cmd_args)
-
-    elif cmd_args.cmd_name == 'reinit':
-        restart_containers (node_info, cmd_args)
-
-    elif cmd_args.cmd_name == 'exit':
-        stop_containers (node_info, cmd_args)
+        stop_traffic (pod_info, cmd_args)
 
 
 
