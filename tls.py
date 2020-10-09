@@ -6,7 +6,7 @@ import argparse
 import json
 import jinja2
 
-from run import start_run
+from run import start_run, is_valid_testbed, get_pcap_dir, get_pod_count, map_pod_interface
 
 supported_ciphers = [
     {'cipher_name' : 'AES128-SHA',
@@ -519,35 +519,40 @@ supported_ciphers = [
 def get_arguments():
     arg_parser = argparse.ArgumentParser(description = 'tls : client - server')
 
-    arg_parser.add_argument('--sysinit'
-                                , action="store_true"
-                                , default=False
-                                , help = 'sysinit')
-
-    arg_parser.add_argument('--host_rundir'
+    arg_parser.add_argument('--node_rundir'
                                 , action="store"
                                 , default='/root/rundir'
                                 , help = 'rundir path')
 
-    arg_parser.add_argument('--target_rundir'
+    arg_parser.add_argument('--pod_rundir'
                                 , action="store"
                                 , default='/rundir'
                                 , help = 'rundir path in container')
 
-    arg_parser.add_argument('--host_srcdir'
+    arg_parser.add_argument('--node_srcdir'
                                 , action="store"
                                 , default='/root/tcpdash'
-                                , help = 'host_srcdir')
+                                , help = 'node_srcdir')
 
-    arg_parser.add_argument('--target_srcdir'
+    arg_parser.add_argument('--pod_srcdir'
                                 , action="store"
                                 , default='/root/tcpdash'
-                                , help = 'target_srcdir')
+                                , help = 'pod_srcdir')
 
-    arg_parser.add_argument('--pod'
+    arg_parser.add_argument('--testbed'
                                 , action="store"
                                 , required=True
-                                , help = 'pod name')
+                                , help = 'testbed name')
+
+    arg_parser.add_argument('--restart'
+                                , action="store_true"
+                                , default=False
+                                , help = 'testbed name')
+
+    arg_parser.add_argument('--force'
+                                , action="store_true"
+                                , default=False
+                                , help = 'testbed name')
 
     arg_parser.add_argument('--runid'
                                 , action="store"
@@ -695,9 +700,11 @@ def get_arguments():
                             , default=5000
                             , help = 'app_sc_starttls_len')
 
+    return arg_parser.parse_args()
+
 
 def get_config (c_args):
-    return jinja2.Template('''
+    config_s = jinja2.Template('''
     {
         "tgen_app" : "cps",
         "zones" : [
@@ -756,12 +763,12 @@ def get_config (c_args):
                     ],
 
                     "zone_cmds" : [
-                        "ip link set dev {{PARAMS.na_iface_container}} up",
-                        "ifconfig {{PARAMS.na_iface_container}} hw ether {{PARAMS.client_mac_seed}}:{{'{:02x}'.format(traffic_id)}}",
-                        "ip route add default dev {{PARAMS.na_iface_container}} table 200",
+                        "ip link set dev {{PARAMS.pod_na_iface}} up",
+                        "ifconfig {{PARAMS.pod_na_iface}} hw ether {{PARAMS.client_mac_seed}}:{{'{:02x}'.format(traffic_id)}}",
+                        "ip route add default dev {{PARAMS.pod_na_iface}} table 200",
                         "ip -4 route add local 12.2{{traffic_id}}.51.0/24 dev lo",
                         "ip rule add from 12.2{{traffic_id}}.51.0/24 table 200",
-                        "tcpdump -i {{PARAMS.na_iface_container}} {{PARAMS.tcpdump}} -w {{PARAMS.pcaps_dir_container.rstrip('/')}}/zone-{{traffic_id}}-client.pcap &"
+                        "tcpdump -i {{PARAMS.pod_na_iface}} {{PARAMS.tcpdump}} -w {{PARAMS.pod_pcap_dir.rstrip('/')}}/zone-{{traffic_id}}-client.pcap &"
                     ]
                 }
                 ,
@@ -815,12 +822,12 @@ def get_config (c_args):
                     ],
 
                     "zone_cmds" : [
-                        "ip link set dev {{PARAMS.nb_iface_container}} up",
-                        "ifconfig {{PARAMS.nb_iface_container}} hw ether {{PARAMS.server_mac_seed}}:{{'{:02x}'.format(traffic_id)}}",
-                        "ip route add default dev {{PARAMS.nb_iface_container}} table 200",
+                        "ip link set dev {{PARAMS.pod_nb_iface}} up",
+                        "ifconfig {{PARAMS.pod_nb_iface}} hw ether {{PARAMS.server_mac_seed}}:{{'{:02x}'.format(traffic_id)}}",
+                        "ip route add default dev {{PARAMS.pod_nb_iface}} table 200",
                         "ip -4 route add local 14.2{{traffic_id}}.51.0/24 dev lo",
                         "ip rule add from 14.2{{traffic_id}}.51.0/24 table 200",
-                        "tcpdump -i {{PARAMS.nb_iface_container}} {{PARAMS.tcpdump}} -w {{PARAMS.pcaps_dir_container.rstrip('/')}}/zone-{{traffic_id}}-server.pcap &"
+                        "tcpdump -i {{PARAMS.pod_nb_iface}} {{PARAMS.tcpdump}} -w {{PARAMS.pod_pcap_dir.rstrip('/')}}/zone-{{traffic_id}}-server.pcap &"
                     ]
                 }
                 {{ "," if not loop.last }}
@@ -829,48 +836,50 @@ def get_config (c_args):
     }
     ''').render(PARAMS = c_args)
 
+    try:
+        config_j = json.loads(config_s)
+    except:
+        print config_s
+        raise
+
+    return config_j
+
 
 if __name__ == '__main__':
     c_args = get_arguments ()
 
-    try:
-        with open(os.path.join (c_args.host_rundir
-                                , 'registry'
-                                , 'pods'
-                                , c_args.pod
-                                , 'config.json') ) as f:
-            pod_info = json.load(f)
-    except Exception as er:
-        print 'invalid pod {}'.format (c_args.pod)
+    if not is_valid_testbed(c_args.node_rundir, c_args.testbed):
+        print 'invalid testbed {}'.format (c_args.testbed)
         sys.exit(1)
 
-    # todo
-    c_args.pcaps_dir_container = os.path.join(c_args.target_rundir
-                                                , 'traffic'
-                                                , c_args.runid, 'pcaps')
 
-    c_args.na_iface_container = filter (lambda n : n['host_iface'] == c_args.na_iface
-                                        , pod_info['networks'])[0]['container_iface']
+    c_args.pod_pcap_dir = get_pcap_dir (c_args.pod_rundir, c_args.runid)
 
-    c_args.nb_iface_container = filter (lambda n : n['host_iface'] == c_args.nb_iface
-                                        , pod_info['networks'])[0]['container_iface']
+    c_args.pod_na_iface = map_pod_interface (c_args.node_rundir
+                                                    , c_args.testbed
+                                                    , c_args.na_iface)
 
-    c_args.traffic_paths = pod_info['containers']['count'] / 2
+    c_args.pod_nb_iface = map_pod_interface (c_args.node_rundir
+                                                    , c_args.testbed
+                                                    , c_args.nb_iface)
+
+    c_args.traffic_paths = get_pod_count (c_args.node_rundir, c_args.testbed) / 2
 
     c_args.cps = c_args.cps / c_args.traffic_paths
     c_args.max_active = c_args.max_active / c_args.traffic_paths
     c_args.max_pipeline = c_args.max_pipeline / c_args.traffic_paths
     c_args.total_conn_count = c_args.total_conn_count / c_args.traffic_paths
 
-    cfg_s = get_config (c_args)
+    cfg_j = get_config (c_args)
 
-    start_run (c_args.pod
-                , c_args.host_rundir
-                , c_args.target_rundir
-                , c_args.host_srcdir
-                , c_args.target_srcdir
+    start_run (c_args.testbed
+                , c_args.node_rundir
+                , c_args.pod_rundir
+                , c_args.node_srcdir
+                , c_args.pod_srcdir
                 , 8081 #todo
                 , c_args.runid
-                , cfg_s
-                , c_args.sysinit)
+                , cfg_j
+                , c_args.restart
+                , c_args.force)
 
