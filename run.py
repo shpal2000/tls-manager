@@ -182,11 +182,14 @@ def start_run_thread(testbed
                         , rpc_proxy_port):
     pod_ip = get_pod_ip (testbed, pod_index)
 
-    requests.post('http://{}:{}/start'.format(pod_ip, rpc_proxy_port)
+    resp = requests.post('http://{}:{}/start'.format(pod_ip, rpc_proxy_port)
                     , data = json.dumps({'cfg_file': pod_cfg_file
                                             , 'z_index' : pod_index
                                             , 'net_ifaces' : pod_iface_list })
                     , headers={'Content-type': 'application/json', 'Accept': 'text/plain'})
+    
+    # todo
+    # print resp.content 
 
 
 def start_run(testbed
@@ -240,7 +243,7 @@ def start_run(testbed
                         , pod_srcdir
                         , rpc_proxy_port)
         print 'initializing testbed {}; will take minute or two ...'.format (testbed)
-        time.sleep (60)
+        time.sleep (20)
 
     node_cfg_dir = get_run_traffic_dir(node_rundir, runid)
     node_cfg_file = get_run_traffic_config_file (node_rundir, runid)
@@ -253,7 +256,7 @@ def start_run(testbed
     set_testbed_status (registry_file_testbed, ready=1, runing=runid)
 
     pod_cfg_dir = get_run_traffic_dir(pod_rundir, runid)
-    pod_cfg_file = get_run_traffic_config_file(pod_cfg_dir, runid)
+    pod_cfg_file = get_run_traffic_config_file(pod_rundir, runid)
 
     for next_step in range(1, 3):
         pod_start_threads = []
@@ -287,10 +290,11 @@ def stop_run_thread(testbed
                         , rpc_proxy_port):
     pod_ip = get_pod_ip (testbed, pod_index)
 
-    requests.post('http://{}:{}/stop'.format(pod_ip, rpc_proxy_port)
+    resp = requests.post('http://{}:{}/stop'.format(pod_ip, rpc_proxy_port)
                     , data = json.dumps({'net_ifaces' : pod_iface_list })
                     , headers={'Content-type': 'application/json', 'Accept': 'text/plain'})
-
+    # todo
+    # print resp.content 
 
 def stop_run(runid
                 , node_rundir

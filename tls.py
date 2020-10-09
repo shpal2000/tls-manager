@@ -794,7 +794,7 @@ def get_config (c_args):
                                         {
                                             "srv_label" : "srv_{{loop.index}}",
                                             "enable" : 1,
-                                            "emulation_id" : 1,
+                                            "emulation_id": 0,
                                             "begin_cert_index" : 1,
                                             "end_cert_index" : 100000,
                                             "srv_ip" : "14.2{{traffic_id}}.51.{{loop.index}}",
@@ -852,6 +852,16 @@ if __name__ == '__main__':
         print 'invalid testbed {}'.format (c_args.testbed)
         sys.exit(1)
 
+    supported_cipher_names = map(lambda x : x['cipher_name'], supported_ciphers)
+
+    if c_args.cipher not in supported_cipher_names:
+        print 'unsupported cipher {}'.format (c_args.cipher)
+        sys.exit(1)
+
+    selected_cipher = filter (lambda n : n['cipher_name'] == c_args.cipher
+                                                        , supported_ciphers)[0]
+    c_args.server_cert = selected_cipher['srv_cert']
+    c_args.server_key = selected_cipher['srv_key']
 
     c_args.pod_pcap_dir = get_pcap_dir (c_args.pod_rundir, c_args.runid)
 
