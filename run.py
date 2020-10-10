@@ -9,6 +9,7 @@ from threading import Thread
 import pdb
 import requests
 
+
 def get_pod_name (testbed, pod_index):
     return "{}-pod-{}".format (testbed, pod_index+1)
 
@@ -176,6 +177,7 @@ def map_pod_interface (node_rundir, testbed, node_iface):
 
 
 def start_run_thread(testbed
+                        , zone_type
                         , pod_index
                         , pod_cfg_file
                         , pod_iface_list
@@ -185,7 +187,12 @@ def start_run_thread(testbed
     resp = requests.post('http://{}:{}/start'.format(pod_ip, rpc_proxy_port)
                     , data = json.dumps({'cfg_file': pod_cfg_file
                                             , 'z_index' : pod_index
-                                            , 'net_ifaces' : pod_iface_list })
+                                            , 'z_type' : zone_type
+                                            , 'net_ifaces' : pod_iface_list
+                                            , 'result_db_cstring': '10.115.78.80:27017'
+                                            , 'result_db_name' : 'daily_issl_perf'
+                                            , 'result_col_name' : 'tls_cps_build_1'
+                                            })
                     , headers={'Content-type': 'application/json', 'Accept': 'text/plain'})
     
     # todo
@@ -258,7 +265,7 @@ def start_run(testbed
     pod_cfg_dir = get_run_traffic_dir(pod_rundir, runid)
     pod_cfg_file = get_run_traffic_config_file(pod_rundir, runid)
 
-    for next_step in range(1, 3):
+    for zone_type in ['server', 'client']:
         pod_start_threads = []
         pod_index = -1
         for zone in node_cfg_j['zones']:
@@ -267,9 +274,10 @@ def start_run(testbed
             if not zone['enable']:
                 continue
 
-            if zone.get('step', 1) == next_step:
+            if zone.get('zone_type', 'client') == zone_type:
                 thd = Thread(target=start_run_thread
                             , args=[testbed
+                                    , zone_type
                                     , pod_index
                                     , pod_cfg_file
                                     , pod_iface_list
