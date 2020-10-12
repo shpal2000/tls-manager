@@ -6,7 +6,9 @@ import argparse
 import json
 import jinja2
 
-from run import start_run, is_valid_testbed, get_pcap_dir, get_pod_count, map_pod_interface
+from run import start_run, is_valid_testbed, get_pcap_dir 
+from run import get_pod_count, map_pod_interface
+
 
 supported_ciphers = [
     {'cipher_name' : 'AES128-SHA',
@@ -711,9 +713,9 @@ def get_config (c_args):
             {% set ns = namespace(cs_grp_count=0, srv_count=0) %}
             {%- for traffic_id in range(1, PARAMS.traffic_paths+1) %}
                 {
+                    "zone_type" : "client",
                     "zone_label" : "zone-{{traffic_id}}-client",
                     "enable" : 1,
-                    "step" : 2,
                     "app_list" : [
                         {
                             "app_type" : "tls_client",
@@ -773,9 +775,9 @@ def get_config (c_args):
                 }
                 ,
                 {
+                    "zone_type" : "server",
                     "zone_label" : "zone-{{traffic_id}}-server",
                     "enable" : 1,
-                    "step" : 1,
                     "app_list" : [
                         {
                             "app_type" : "tls_server",
@@ -799,8 +801,8 @@ def get_config (c_args):
                                             "end_cert_index" : 100000,
                                             "srv_ip" : "14.2{{traffic_id}}.51.{{loop.index}}",
                                             "srv_port" : 443,
-                                            "srv_cert" : "{{PARAMS.server_cert}}",
-                                            "srv_key" : "{{PARAMS.server_key}}",
+                                            "srv_cert" : "/rundir/certs/server1.cert",
+                                            "srv_key" : "/rundir/certs/server1.key",
                                             "cipher" : "{{PARAMS.cipher}}",
                                             "tls_version" : "{{tls_ver}}",
                                             "close_type" : "fin",
@@ -844,7 +846,6 @@ def get_config (c_args):
 
     return config_j
 
-
 if __name__ == '__main__':
     c_args = get_arguments ()
 
@@ -887,7 +888,6 @@ if __name__ == '__main__':
                 , c_args.pod_rundir
                 , c_args.node_srcdir
                 , c_args.pod_srcdir
-                , 8081 #todo
                 , c_args.runid
                 , cfg_j
                 , c_args.restart

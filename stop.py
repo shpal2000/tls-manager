@@ -32,7 +32,6 @@ if __name__ == '__main__':
 
     status, msg = stop_run (c_args.runid
                             , c_args.node_rundir
-                            , 8081 #todo
                             , c_args.force)
     if status:
         print msg
