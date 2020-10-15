@@ -204,10 +204,10 @@ def get_stats (pod_ips, pod_port):
         except:
             stats_list.append ({})
 
-        stats_sum = {}
-        for stats_key in stats_keys:
-            stats_values = map(lambda s : s.get(stats_key, 0), stats_list) 
-            stats_sum[stats_key] = reduce(lambda x, y : x + y, stats_values)
+    stats_sum = {}
+    for stats_key in stats_keys:
+        stats_values = map(lambda s : s.get(stats_key, 0), stats_list) 
+        stats_sum[stats_key] = reduce(lambda x, y : x + y, stats_values)
 
     return stats_sum
 
@@ -412,7 +412,10 @@ def stop_run(runid
     if to_force:
         stats_pid = get_testbed_stats_pid (registry_file_run)
         if stats_pid:
-            os.kill (stats_pid, signal.SIGTERM)
+            try:
+                os.kill (stats_pid, signal.SIGTERM)
+            except:
+                pass
         set_testbed_stats_pid (registry_file_run, 0)
         dispose_testbed (testbed, pod_count)
         set_testbed_status (registry_file_testbed, ready=0, runing='')
