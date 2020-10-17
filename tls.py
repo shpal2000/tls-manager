@@ -746,8 +746,8 @@ def get_config (c_args):
                                             "clnt_port_end" : 65000,
                                             "cipher" : "{{PARAMS.cipher}}",
                                             "tls_version" : "{{tls_ver}}",
-                                            "close_type" : "fin",
-                                            "close_notify" : "no_send",
+                                            "close_type" : "reset",
+                                            "close_notify" : "send",
                                             "app_rcv_buff" : {{PARAMS.app_rcv_buff}},
                                             "app_snd_buff" : {{PARAMS.app_snd_buff}},
                                             "write_chunk" : {{PARAMS.app_next_write}},
@@ -756,7 +756,8 @@ def get_config (c_args):
                                             "cs_data_len" : {{PARAMS.app_cs_data_len}},
                                             "sc_data_len" : {{PARAMS.app_sc_data_len}},
                                             "cs_start_tls_len" : {{PARAMS.app_cs_starttls_len}},
-                                            "sc_start_tls_len" : {{PARAMS.app_sc_starttls_len}}
+                                            "sc_start_tls_len" : {{PARAMS.app_sc_starttls_len}},
+                                            "session_resumption" : 0
                                         }
                                     {%- endif %}
                                 {%- endfor %}                         
@@ -806,7 +807,7 @@ def get_config (c_args):
                                             "cipher" : "{{PARAMS.cipher}}",
                                             "tls_version" : "{{tls_ver}}",
                                             "close_type" : "fin",
-                                            "close_notify" : "no_send",
+                                            "close_notify" : "send",
                                             "app_rcv_buff" : {{PARAMS.app_rcv_buff}},
                                             "app_snd_buff" : {{PARAMS.app_snd_buff}},
                                             "write_chunk" : {{PARAMS.app_next_write}},
@@ -815,7 +816,8 @@ def get_config (c_args):
                                             "cs_data_len" : {{PARAMS.app_cs_data_len}},
                                             "sc_data_len" : {{PARAMS.app_sc_data_len}},
                                             "cs_start_tls_len" : {{PARAMS.app_cs_starttls_len}},
-                                            "sc_start_tls_len" : {{PARAMS.app_sc_starttls_len}}
+                                            "sc_start_tls_len" : {{PARAMS.app_sc_starttls_len}},
+                                            "session_resumption" : 0
                                         }
                                     {%- endif %}
                                 {%- endfor %}

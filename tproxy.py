@@ -145,18 +145,22 @@ def get_config (c_args):
                     "sysctl net.ipv4.conf.all.rp_filter=0",
                     "sysctl net.ipv4.conf.default.rp_filter=0",
 
+                    "ip link set dev {{PARAMS.pod_ta_iface}} down",
+                    "ip link set dev {{PARAMS.pod_ta_iface}} address {{PARAMS.server_mac_seed}}:{{'{:02x}'.format(1)}}",
                     "ip link set dev {{PARAMS.pod_ta_iface}} up",
-                    "ifconfig {{PARAMS.pod_ta_iface}} hw ether {{PARAMS.server_mac_seed}}:{{'{:02x}'.format(1)}}",
                     "sysctl net.ipv4.conf.{{PARAMS.pod_ta_iface}}.rp_filter=0",
+
                     "ip link add link {{PARAMS.pod_ta_iface}} name {{PARAMS.pod_ta_iface}}.{{PARAMS.proxy_traffic_vlan}} type vlan id {{PARAMS.proxy_traffic_vlan}}",
                     "ip link set dev {{PARAMS.pod_ta_iface}}.{{PARAMS.proxy_traffic_vlan}} up",
                     "ip addr add 1.1.1.1/24 dev {{PARAMS.pod_ta_iface}}.{{PARAMS.proxy_traffic_vlan}}",
                     "arp -i {{PARAMS.pod_ta_iface}}.{{PARAMS.proxy_traffic_vlan}} -s 1.1.1.254 {{PARAMS.client_mac_seed}}:{{'{:02x}'.format(1)}}",
                     "ip route add {{PARAMS.ta_subnet}} via 1.1.1.254 dev {{PARAMS.pod_ta_iface}}.{{PARAMS.proxy_traffic_vlan}}",
 
+                    "ip link set dev {{PARAMS.pod_tb_iface}} down",
+                    "ip link set dev {{PARAMS.pod_tb_iface}} address {{PARAMS.client_mac_seed}}:{{'{:02x}'.format(1)}}",
                     "ip link set dev {{PARAMS.pod_tb_iface}} up",
-                    "ifconfig {{PARAMS.pod_tb_iface}} hw ether {{PARAMS.client_mac_seed}}:{{'{:02x}'.format(1)}}",
                     "sysctl net.ipv4.conf.{{PARAMS.pod_tb_iface}}.rp_filter=0",
+
                     "ip link add link {{PARAMS.pod_tb_iface}} name {{PARAMS.pod_tb_iface}}.{{PARAMS.proxy_traffic_vlan}} type vlan id {{PARAMS.proxy_traffic_vlan}}",
                     "ip link set dev {{PARAMS.pod_tb_iface}}.{{PARAMS.proxy_traffic_vlan}} up",
                     "ip addr add 2.2.2.1/24 dev {{PARAMS.pod_tb_iface}}.{{PARAMS.proxy_traffic_vlan}}",

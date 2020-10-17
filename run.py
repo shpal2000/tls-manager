@@ -20,6 +20,9 @@ from config import RPC_IP_VETH1, RPC_IP_VETH2, RPC_PORT
 def get_pod_name (testbed, pod_index):
     return "{}-pod-{}".format (testbed, pod_index+1)
 
+def get_exe_alias (testbed, pod_index, runid):
+    return "{}-{}.exe".format (get_pod_name (testbed, pod_index), runid)
+
 def get_pod_ip (testbed, pod_index):
     pod_name = get_pod_name (testbed, pod_index)
     cmd_str = "docker inspect --format='{{.NetworkSettings.IPAddress}}' " + pod_name
@@ -49,6 +52,9 @@ def init_testbed(testbed
             os.system (cmd_str)
             cmd_str = "sudo docker network connect {} {}".format(node_macvlan, pod_name)
             os.system (cmd_str)
+
+        cmd_str = "sudo docker exec -d {} echo '/rundir/cores/core.%t.%e.%p' | tee /proc/sys/kernel/core_pattern".format(pod_name)
+        os.system (cmd_str)
 
         cmd_str = "sudo docker exec -d {} cp -f /rundir/bin/tlspack.exe /usr/local/bin".format(pod_name)
         os.system (cmd_str)
@@ -248,22 +254,26 @@ def start_run_thread(testbed
                         , pod_cfg_file
                         , pod_iface_list
                         , pod_ip
-                        , pod_port):
+                        , pod_port
+                        , exe_alias):
 
-    resp = requests.post('http://{}:{}/start'.format(pod_ip, pod_port)
-                , data = json.dumps({'cfg_file': pod_cfg_file
-                                        , 'z_index' : pod_index
-                                        , 'net_ifaces' : pod_iface_list
-                                        , 'rpc_ip_veth1' : RPC_IP_VETH1
-                                        , 'rpc_ip_veth2' : RPC_IP_VETH2
-                                        , 'rpc_port' : RPC_PORT
-                                        })
-                , headers={'Content-type': 'application/json'
-                                        , 'Accept': 'text/plain'})
+    url = 'http://{}:{}/start'.format(pod_ip, pod_port)
+
+    data = {'cfg_file': pod_cfg_file
+                , 'z_index' : pod_index
+                , 'net_ifaces' : pod_iface_list
+                , 'rpc_ip_veth1' : RPC_IP_VETH1
+                , 'rpc_ip_veth2' : RPC_IP_VETH2
+                , 'rpc_port' : RPC_PORT
+                , 'exe_alias' : exe_alias}
+
+    # pdb.set_trace ()
+
+    headers={'Content-type': 'application/json', 'Accept': 'text/plain'}
+
+    resp = requests.post(url, headers=headers, data=json.dumps(data))
     
     # todo
-    # print resp.content 
-
 
 def start_run(testbed
                 , node_rundir
@@ -347,6 +357,7 @@ def start_run(testbed
                     server_pod_ips.append (pod_ip)
                 else:
                     client_pod_ips.append (pod_ip)
+                exe_alias = get_exe_alias(testbed, pod_index, runid)
                 thd = Thread(target=start_run_thread
                             , args=[testbed
                                     , zone_type
@@ -354,7 +365,8 @@ def start_run(testbed
                                     , pod_cfg_file
                                     , pod_iface_list
                                     , pod_ip
-                                    , pod_port])
+                                    , pod_port
+                                    , exe_alias])
                 thd.daemon = True
                 thd.start()
                 pod_start_threads.append(thd)
@@ -383,13 +395,25 @@ def stop_run_thread(testbed
                         , pod_index
                         , pod_iface_list
                         , pod_ip
-                        , pod_port):
+                        , pod_port
+                        , exe_alias):
 
-    resp = requests.post('http://{}:{}/stop'.format(pod_ip, pod_port)
-                    , data = json.dumps({'net_ifaces' : pod_iface_list })
-                    , headers={'Content-type': 'application/json', 'Accept': 'text/plain'})
+    url = 'http://{}:{}/stop'.format(pod_ip, pod_port)
+
+    data = {'net_ifaces' : pod_iface_list
+                , 'rpc_ip_veth1' : RPC_IP_VETH1
+                , 'rpc_ip_veth2' : RPC_IP_VETH2
+                , 'rpc_port' : RPC_PORT
+                , 'exe_alias' : exe_alias}
+
+    # pdb.set_trace ()
+
+    headers={'Content-type': 'application/json', 'Accept': 'text/plain'}
+
+    resp = requests.post(url, headers=headers, data=json.dumps(data))
+
     # todo
-    # print resp.content 
+    # pdb.set_trace ()
 
 def stop_run(runid
                 , node_rundir
@@ -435,12 +459,14 @@ def stop_run(runid
             continue
 
         pod_ip = get_pod_ip (testbed, pod_index)
+        exe_alias = get_exe_alias(testbed, pod_index, runid)
         thd = Thread(target=stop_run_thread
                     , args=[testbed
                             , pod_index
                             , pod_iface_list
                             , pod_ip
-                            , pod_port])
+                            , pod_port
+                            , exe_alias])
         thd.daemon = True
         thd.start()
         pod_stop_threads.append(thd)
