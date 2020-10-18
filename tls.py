@@ -5,6 +5,12 @@ import sys
 import argparse
 import json
 import jinja2
+import time
+
+from pymongo import MongoClient
+
+from config import DB_CSTRING, RESULT_DB_NAME
+from config import LIVE_STATS_TABLE
 
 from run import start_run, is_valid_testbed, get_pcap_dir 
 from run import get_pod_count, map_pod_interface
@@ -708,7 +714,7 @@ def get_arguments():
 def get_config (c_args):
     config_s = jinja2.Template('''
     {
-        "tgen_app" : "cps",
+        "app_module" : "tls",
         "zones" : [
             {% set ns = namespace(cs_grp_count=0, srv_count=0) %}
             {%- for traffic_id in range(1, PARAMS.traffic_paths+1) %}
@@ -847,6 +853,24 @@ def get_config (c_args):
         raise
 
     return config_j
+
+def show_stats (runid):
+    mongoClient = MongoClient (DB_CSTRING)
+    db = mongoClient[RESULT_DB_NAME]
+    stats_col = db[LIVE_STATS_TABLE]
+
+    while True:
+
+        stats = stats_col.find({'runid' : runid})[0]
+
+        print '{}-{}-{} : {} : {} : {}'.format(stats['tick']
+                    , stats['client_stats']['sslConnInitSuccessRate']
+                    , stats['client_stats']['tcpConnInitInUse']
+                    , stats['client_stats']['tcpConnInit']
+                    , stats['server_stats']['tcpAcceptSuccess']
+                    , stats['client_stats']['tcpConnInitSuccess'])
+
+        time.sleep(0.1)
 
 if __name__ == '__main__':
     c_args = get_arguments ()
