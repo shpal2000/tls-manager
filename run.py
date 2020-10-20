@@ -378,25 +378,25 @@ def start_run(testbed
                 else:
                     continue
                 exe_alias = get_exe_alias(testbed, pod_index, runid)
-                # thd = Thread(target=start_run_thread
-                #             , args=[testbed
-                #                     , pod_index
-                #                     , pod_cfg_file
-                #                     , pod_iface_list
-                #                     , pod_ip
-                #                     , pod_port
-                #                     , exe_alias])
-                # thd.daemon = True
-                # thd.start()
-                # pod_start_threads.append(thd)
-
-                start_run_thread (testbed
+                thd = Thread(target=start_run_thread
+                            , args=[testbed
                                     , pod_index
                                     , pod_cfg_file
                                     , pod_iface_list
                                     , pod_ip
                                     , pod_port
-                                    , exe_alias)
+                                    , exe_alias])
+                thd.daemon = True
+                thd.start()
+                pod_start_threads.append(thd)
+
+                # start_run_thread (testbed
+                #                     , pod_index
+                #                     , pod_cfg_file
+                #                     , pod_iface_list
+                #                     , pod_ip
+                #                     , pod_port
+                #                     , exe_alias)
                 
         if pod_start_threads:
             for thd in pod_start_threads:
@@ -413,7 +413,7 @@ def start_run(testbed
     if client_pod_ips:
         pod_ips += ' --client_pod_ips ' + ':'.join(client_pod_ips)
 
-    os.system('python -m tlspack.StatsCollect --runid {} {} --pod_port {} & echo $! > {}'. \
+    os.system('python -m tlspack.stats --runid {} {} --pod_port {} & echo $! > {}'. \
                                 format (runid, pod_ips, pod_port, stats_pid_file))
 
     with open (stats_pid_file) as f:
