@@ -1,8 +1,8 @@
 __author__ = 'Shirish Pal'
 
-from config import NODE_RUNDIR, POD_RUNDIR, NODE_SRCDIR, POD_SRCDIR, TCPDUMP_FLAG
+from .config import NODE_RUNDIR, POD_RUNDIR, NODE_SRCDIR, POD_SRCDIR, TCPDUMP_FLAG
 
-class AppBase(object):
+class App(object):
     def __init__(self):
         self.node_rundir = NODE_RUNDIR
         self.pod_rundir = POD_RUNDIR
@@ -10,7 +10,7 @@ class AppBase(object):
         self.pod_srcdir = POD_SRCDIR
         self.tcpdump = TCPDUMP_FLAG
 
-class TlsCsApp(AppBase):
+class TlsCsApp(App):
     def __init__ (self, props):
         super(TlsCsApp, self).__init__()
         self.cps = props.get ('cps', 1)

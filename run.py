@@ -14,9 +14,9 @@ import importlib
 
 from pymongo import MongoClient
 
-from config import DB_CSTRING, REGISTRY_DB_NAME, RESULT_DB_NAME
-from config import STATS_TABLE, CSTATE_TABLE, LIVE_STATS_TABLE
-from config import RPC_IP_VETH1, RPC_IP_VETH2, RPC_PORT
+from .config import DB_CSTRING, REGISTRY_DB_NAME, RESULT_DB_NAME
+from .config import STATS_TABLE, CSTATE_TABLE, LIVE_STATS_TABLE
+from .config import RPC_IP_VETH1, RPC_IP_VETH2, RPC_PORT
 
 def get_pod_name (testbed, pod_index):
     return "{}-pod-{}".format (testbed, pod_index+1)
@@ -27,7 +27,7 @@ def get_exe_alias (testbed, pod_index, runid):
 def get_pod_ip (testbed, pod_index):
     pod_name = get_pod_name (testbed, pod_index)
     cmd_str = "docker inspect --format='{{.NetworkSettings.IPAddress}}' " + pod_name
-    return subprocess.check_output(cmd_str, shell=True, close_fds=True).strip()
+    return subprocess.check_output(cmd_str, shell=True, close_fds=True).decode("utf-8").strip()
 
 def init_testbed(testbed
                 , pod_count
@@ -39,6 +39,8 @@ def init_testbed(testbed
                 , pod_srcdir
                 , pod_port):
 
+    # pdb.set_trace()
+    
     rundir_map = "--volume={}:{}".format (node_rundir, pod_rundir)
     srcdir_map = "--volume={}:{}".format (node_srcdir, pod_srcdir)
 
@@ -89,17 +91,14 @@ def set_registry_data (registry_file, testbed_info):
     with open(registry_file, 'w') as f:
         json.dump(testbed_info, f)
 
-def get_testbed_pod_count(registry_file):
-    return get_registry_data (registry_file)['containers']['count']
-
 def get_testbed_pod_iface_list(registry_file):
-    return map (lambda n : n['container_iface'], get_registry_data (registry_file)['networks'])
+    return list (map (lambda n : n['container_iface'], get_registry_data (registry_file)['networks']))
 
 def get_testbed_node_iface_list(registry_file):
-    return map (lambda n : n['host_iface'], get_registry_data (registry_file)['networks'])
+    return list (map (lambda n : n['host_iface'], get_registry_data (registry_file)['networks']))
 
 def get_testbed_node_macvlan_list(registry_file):
-    return map (lambda n : n['host_macvlan'], get_registry_data (registry_file)['networks'])
+    return list (map (lambda n : n['host_macvlan'], get_registry_data (registry_file)['networks']))
 
 def set_testbed_status(registry_file, ready, runing):
     testbed_info = get_registry_data (registry_file)
@@ -186,10 +185,6 @@ def get_run_module_name (base_dir, runid):
 def get_pcap_dir (base_dir, runid):
     return os.path.join( get_run_traffic_dir(base_dir, runid),  'pcaps')
 
-def get_pod_count (node_rundir, testbed):
-    registry_file = get_testbed_registry_file (node_rundir, testbed)
-    return get_testbed_pod_count (registry_file)
-
 def is_valid_testbed (node_rundir, testbed):
     ret = True
     registry_file = get_testbed_registry_file (node_rundir, testbed)
@@ -199,10 +194,20 @@ def is_valid_testbed (node_rundir, testbed):
         ret = False
     return ret
 
-def map_pod_interface (node_rundir, testbed, node_iface):
+def get_testbed_info (node_rundir, testbed):
     registry_file = get_testbed_registry_file (node_rundir, testbed)
-    return filter (lambda n : n['host_iface'] == node_iface
-                    , get_registry_data(registry_file)['networks'])[0]['container_iface']
+    try:
+        ret = get_registry_data (registry_file)
+    except:
+        ret = {}
+    return ret
+
+def map_pod_interface (node_rundir, testbed, node_iface):
+    testbed_info = get_testbed_info (node_rundir, testbed)
+
+    for net in testbed_info['networks']:
+        if net['host_iface'] == node_iface:
+            return net['container_iface']
 
 def get_stats (pod_ips, pod_port):
     stats_list = []
@@ -276,13 +281,12 @@ def start_run_thread(testbed
 
     # pdb.set_trace ()
 
-    headers={'Content-type': 'application/json', 'Accept': 'text/plain'}
-
-    resp = requests.post(url, headers=headers, data=json.dumps(data))
+    resp = requests.post(url, json=data)
     
     # todo
 
 def start_run(testbed
+                , pod_count
                 , node_rundir
                 , pod_rundir
                 , node_srcdir
@@ -301,11 +305,13 @@ def start_run(testbed
     
     if restart:
         if is_running (registry_file_run):   
-            stop_run (runid
+            stop_run (testbed
+                        , pod_count
                         , node_rundir
+                        , runid
                         , force)
         else:
-            dispose_testbed (testbed, get_testbed_pod_count(registry_file_testbed) )
+            dispose_testbed (testbed, pod_count)
             set_testbed_status (registry_file_testbed, ready=0, runing='')
 
     runing_testbed = get_run_testbed (registry_file_run)
@@ -316,14 +322,13 @@ def start_run(testbed
     if testbed_runid:
         return (-1,  'error: {} testbed in use runing {}'.format(testbed
                                                             , testbed_runid))
-        
-    pod_count = get_testbed_pod_count (registry_file_testbed)
+
     node_iface_list = get_testbed_node_iface_list (registry_file_testbed)
     node_macvlan_list = get_testbed_node_macvlan_list (registry_file_testbed)
     pod_iface_list = get_testbed_pod_iface_list (registry_file_testbed)
 
     if not get_tesbed_ready (registry_file_testbed):
-        print 'initializing testbed {}'.format (testbed)
+        print ('initializing testbed {}'.format (testbed))
         init_testbed (testbed                
                         , pod_count
                         , node_iface_list
@@ -333,7 +338,7 @@ def start_run(testbed
                         , node_srcdir
                         , pod_srcdir
                         , pod_port)
-        print 'initializing testbed {}; will take minute or two ...'.format (testbed)
+        print ('initializing testbed {}; will take minute or two ...'.format (testbed))
         time.sleep (20)
 
     node_cfg_dir = get_run_traffic_dir(node_rundir, runid)
@@ -373,17 +378,26 @@ def start_run(testbed
                 else:
                     continue
                 exe_alias = get_exe_alias(testbed, pod_index, runid)
-                thd = Thread(target=start_run_thread
-                            , args=[testbed
+                # thd = Thread(target=start_run_thread
+                #             , args=[testbed
+                #                     , pod_index
+                #                     , pod_cfg_file
+                #                     , pod_iface_list
+                #                     , pod_ip
+                #                     , pod_port
+                #                     , exe_alias])
+                # thd.daemon = True
+                # thd.start()
+                # pod_start_threads.append(thd)
+
+                start_run_thread (testbed
                                     , pod_index
                                     , pod_cfg_file
                                     , pod_iface_list
                                     , pod_ip
                                     , pod_port
-                                    , exe_alias])
-                thd.daemon = True
-                thd.start()
-                pod_start_threads.append(thd)
+                                    , exe_alias)
+                
         if pod_start_threads:
             for thd in pod_start_threads:
                 thd.join()
@@ -399,7 +413,7 @@ def start_run(testbed
     if client_pod_ips:
         pod_ips += ' --client_pod_ips ' + ':'.join(client_pod_ips)
 
-    os.system('python ./tlspack/run.py --runid {} {} --pod_port {} & echo $! > {}'. \
+    os.system('python -m tlspack.StatsCollect --runid {} {} --pod_port {} & echo $! > {}'. \
                                 format (runid, pod_ips, pod_port, stats_pid_file))
 
     with open (stats_pid_file) as f:
@@ -425,15 +439,15 @@ def stop_run_thread(testbed
 
     # pdb.set_trace ()
 
-    headers={'Content-type': 'application/json', 'Accept': 'text/plain'}
-
-    resp = requests.post(url, headers=headers, data=json.dumps(data))
+    resp = requests.post(url, data=json.dumps(data))
 
     # todo
     # pdb.set_trace ()
 
-def stop_run(runid
+def stop_run(testbed
+                , pod_count
                 , node_rundir
+                , runid
                 , force=False):
 
     pod_port = RPC_PORT
@@ -441,13 +455,7 @@ def stop_run(runid
     registry_dir_run = get_run_registry_dir (node_rundir, runid)
     registry_file_run = get_run_registry_file (node_rundir, runid)
 
-    testbed = get_run_testbed (registry_file_run)
-    if not testbed:
-        return (-1, 'error : invalid runid {}'.format(runid))
-
     registry_file_testbed = get_testbed_registry_file (node_rundir, testbed)
-    
-    pod_count = get_testbed_pod_count (registry_file_testbed)
     pod_iface_list = get_testbed_pod_iface_list (registry_file_testbed)
 
     if force:
@@ -494,7 +502,10 @@ def stop_run(runid
 
     stats_pid = get_run_stats_pid (registry_file_run)
     if stats_pid:
-        os.kill (stats_pid, signal.SIGTERM)
+        try:
+            os.kill (stats_pid, signal.SIGTERM)
+        except:
+            pass
     set_run_stats_pid (registry_file_run, 0)
 
     set_testbed_status (registry_file_testbed, ready=1, runing='')
@@ -521,17 +532,15 @@ def show_stats(runid, node_rundir):
     run_module.show_stats (runid)
 
 def purge_testbed(testbed
+                , pod_count
                 , node_rundir
                 , force):
 
     registry_file_testbed = get_testbed_registry_file (node_rundir, testbed)
     
-    pod_count = get_testbed_pod_count (registry_file_testbed)
-    pod_iface_list = get_testbed_pod_iface_list (registry_file_testbed)
-
     testbed_runid = get_testbed_runid (registry_file_testbed)
     if testbed_runid and not force:
-        print 'error: {} testbed in use runing {}'.format(testbed, testbed_runid)
+        print ('error: {} testbed in use runing {}'.format(testbed, testbed_runid))
         return
     
     runid = testbed_runid
@@ -550,46 +559,3 @@ def purge_testbed(testbed
     set_testbed_status (registry_file_testbed, ready=0, runing='')
     dispose_run (registry_dir_run)
 
-def get_arguments ():
-    arg_parser = argparse.ArgumentParser(description = 'stats')
-
-    arg_parser.add_argument('--runid'
-                                , action="store"
-                                , required=True
-                                , help = 'run id')
-                                
-    arg_parser.add_argument('--server_pod_ips'
-                                , action="store"
-                                , default=''
-                                , help = 'run id')
-
-    arg_parser.add_argument('--proxy_pod_ips'
-                                , action="store"
-                                , default=''
-                                , help = 'run id')
-
-    arg_parser.add_argument('--client_pod_ips'
-                                , action="store"
-                                , default=''
-                                , help = 'run id')
-
-    arg_parser.add_argument('--pod_port'
-                                , action="store"
-                                , type=int
-                                , default=8081
-                                , help = 'pod_port')
-
-    return arg_parser.parse_args()
-
-if __name__ == '__main__':
-    c_args = get_arguments ()
-
-    server_pod_ips = c_args.server_pod_ips.split(':')
-    proxy_pod_ips = c_args.proxy_pod_ips.split(':')
-    client_pod_ips = c_args.client_pod_ips.split(':')
-
-    collect_stats (c_args.runid
-                    , server_pod_ips
-                    , proxy_pod_ips
-                    , client_pod_ips
-                    , c_args.pod_port)
