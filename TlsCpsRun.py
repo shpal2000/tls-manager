@@ -6,9 +6,14 @@ import os
 import jinja2
 import json
 import uuid
-from .run import start_run, stats_run, stop_run
-from .run import get_pcap_dir, purge_testbed, get_testbed_info
-from .run import map_pod_interface
+
+from .run import start_run, init_testbed, stats_run, stop_run, get_pod_ip
+from .run import get_pcap_dir, purge_testbed, get_testbed_info, stop_run_stats
+
+from .run import is_valid_testbed, is_app_running, set_zone_status, get_zone_runid
+from .run import get_zone_ready, init_app_run, set_zone_status, start_run_stats
+
+from .run import dispose_app_run, stop_run_stats, dispose_testbed
 
 import pdb
 
@@ -36,33 +41,66 @@ class TlsCpsRun(TlsCsApp):
 
     def start(self, restart=False, force=False):
 
-        self.pod_pcap_dir = get_pcap_dir (self.pod_rundir
-                                                , self.runid)
+        if not is_valid_testbed (self.node_rundir, self.testbed):
+            return (-1,  'invalid testbed {}'.format (self.testbed))
 
         testbed_info = get_testbed_info (self.node_rundir
                                                 , self.testbed)
+
+        self.pod_pcap_dir = get_pcap_dir (self.pod_rundir
+                                                , self.runid)
 
         self.traffic_paths = testbed_info['traffic_paths']
 
         self.traffic_path_count = len (self.traffic_paths)
 
-        self.pod_count = self.traffic_path_count * 2
+        self.pod_index_list = range (self.traffic_path_count * 2)
 
+        self.pod_index_list_server = range (self.traffic_path_count)
 
+        self.pod_index_list_client = range (self.traffic_path_count
+                                            , self.traffic_path_count * 2)
+
+        self.node_iface_list_client = []
+        self.node_iface_list_server = []
+
+        self.node_macvlan_list_client = []
+        self.node_macvlan_list_server = []
+
+        self.pod_iface_list_client = []
+        self.pod_iface_list_server = []
+
+        pod_iface_index_client = 1
+        pod_iface_index_server = 1
+
+        pdb.set_trace()
         for traffic_path in self.traffic_paths:
-            traffic_path['client']['pod_iface'] = map_pod_interface(
-                                                    self.node_rundir,
-                                                    self.testbed,
-                                                    traffic_path['client']['iface'])
+
+            next_iface = traffic_path['client']['iface']
+            if not next_iface in self.node_iface_list_client:
+                self.node_iface_list_client.append (next_iface)
+                next_macvlan = testbed_info[next_iface]['macvlan']
+                self.node_macvlan_list_client.append (next_macvlan)
+                next_pod_iface = 'eth{}'.format(pod_iface_index_client)
+                self.pod_iface_list_client.append (next_pod_iface)
+                traffic_path['client']['pod_iface'] = next_pod_iface
+                pod_iface_index_client += 1
+
+            next_iface = traffic_path['server']['iface']
+            if not next_iface in self.node_iface_list_server:
+                self.node_iface_list_server.append (next_iface)
+                next_macvlan = testbed_info[next_iface]['macvlan']
+                self.node_macvlan_list_server.append (next_macvlan)
+                next_pod_iface = 'eth{}'.format(pod_iface_index_server)
+                self.pod_iface_list_server.append (next_pod_iface)
+                traffic_path['server']['pod_iface'] = next_pod_iface
+                pod_iface_index_server += 1
+
 
             for cs_g in traffic_path['client']['client_list']:
                 cs_g['client_port_begin'] = self.client_port_begin
                 cs_g['client_port_end'] = self.client_port_end
             
-            traffic_path['server']['pod_iface'] = map_pod_interface(
-                                                    self.node_rundir,
-                                                    self.testbed,
-                                                    traffic_path['server']['iface'])
 
         self.max_active_tp = 100
         self.max_pipeline_tp = 100
@@ -70,32 +108,120 @@ class TlsCpsRun(TlsCsApp):
         self.total_conn_count_tp = self.total_conn_count / self.traffic_path_count
 
         self.config_s = TlsCpsRun.J2Template.render(PARAMS = vars(self))
-
         self.config_j = json.loads(self.config_s)
+
+
+        if restart:
+            if is_app_running (self.node_rundir, self.runid):
+                stop_run (self.testbed
+                            , self.pod_index_list
+                            , self.node_rundir
+                            , self.runid
+                            , self.pod_iface_list_client
+                            , force)
+            else:
+                dispose_testbed (self.testbed, self.pod_index_list)
+                set_zone_status (self.node_rundir, self.testbed, ready=0, runing='')
+
+        if is_app_running (self.node_rundir, self.runid):
+            return (-1,  'error: {} already runing'.format (self.runid))
+    
+        zone_runid = get_zone_runid (self.node_rundir, self.testbed)
+        if zone_runid:
+            return (-1,  'error: zone in use; running {}'.format (zone_runid))
+
+        if not get_zone_ready (self.node_rundir, self.testbed):
+            #start the server pods
+            init_testbed (self.testbed                
+                            , self.pod_index_list_server
+                            , self.node_rundir
+                            , self.pod_rundir
+                            , self.node_srcdir
+                            , self.pod_srcdir
+                            , self.node_iface_list_server
+                            , self.node_macvlan_list_server)
+
+            #start the client pods
+            init_testbed (self.testbed                
+                            , self.pod_index_list_client
+                            , self.node_rundir
+                            , self.pod_rundir
+                            , self.node_srcdir
+                            , self.pod_srcdir
+                            , self.node_iface_list_client
+                            , self.node_macvlan_list_client)
+
+
+        init_app_run (self.node_rundir, self.testbed, self.runid, self.config_j)
+
+        set_zone_status (self.node_rundir, self.testbed, ready=1, runing=self.runid)
+
+        #start the servers
         start_run (self.testbed
-                    , self.pod_count
+                    , self.pod_index_list_server
                     , self.node_rundir
                     , self.pod_rundir
                     , self.node_srcdir
                     , self.pod_srcdir
                     , self.runid
                     , self.config_j
-                    , restart
-                    , force)
+                    , self.pod_iface_list_server)
+
+        #start the clients
+        start_run (self.testbed
+                    , self.pod_index_list_client
+                    , self.node_rundir
+                    , self.pod_rundir
+                    , self.node_srcdir
+                    , self.pod_srcdir
+                    , self.runid
+                    , self.config_j
+                    , self.pod_iface_list_client)
+
+        pdb.set_trace()
+        #start collecting stats
+        server_pod_ips = list (map (lambda m: get_pod_ip(self.testbed, m)
+                                            , self.pod_index_list_server))
+
+        client_pod_ips = list (map (lambda m: get_pod_ip(self.testbed, m)
+                                            , self.pod_index_list_client))
+
+        start_run_stats (self.node_rundir
+                            , self.runid
+                            , server_pod_ips = server_pod_ips
+                            , client_pod_ips = client_pod_ips)
+        
 
         self.run_status = {'running' : True}
         self.stats_iter = stats_run (self.runid, self.run_status)
 
     def stop(self, force=False):
-        return stop_run (self.testbed
-                        , self.pod_count
-                        , self.node_rundir
-                        , self.runid
-                        , force)
+        #stop the clients
+        stop_run (self.testbed
+                    , self.pod_index_list_client
+                    , self.node_rundir
+                    , self.runid
+                    , self.pod_iface_list_client
+                    , force)
+
+        #stop the servers
+        stop_run (self.testbed
+                    , self.pod_index_list_server
+                    , self.node_rundir
+                    , self.runid
+                    , self.pod_iface_list_server
+                    , force)
+
+        #stop collecting stats
+        stop_run_stats (self.node_rundir, self.runid)
+
+        dispose_app_run (self.node_rundir, self.runid)
+
+        set_zone_status (self.node_rundir, self.testbed, ready=1, runing='')
 
     def purge(self, force=False):
         purge_testbed (self.testbed
-                        , self.pod_count
+                        , self.pod_index_list
                         , self.node_rundir
                         , force)
 
