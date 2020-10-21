@@ -1,6 +1,7 @@
 __author__ = 'Shirish Pal'
 
 import argparse
+import pdb
 
 from .run import collect_stats
 
@@ -42,6 +43,7 @@ if __name__ == '__main__':
     proxy_pod_ips = c_args.proxy_pod_ips.split(':')
     client_pod_ips = c_args.client_pod_ips.split(':')
 
+    # pdb.set_trace()
     collect_stats (c_args.runid
                     , server_pod_ips
                     , proxy_pod_ips

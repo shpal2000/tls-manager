@@ -56,10 +56,8 @@ class TlsCpsRun(TlsCsApp):
 
         self.pod_index_list = range (self.traffic_path_count * 2)
 
-        self.pod_index_list_server = range (self.traffic_path_count)
-
-        self.pod_index_list_client = range (self.traffic_path_count
-                                            , self.traffic_path_count * 2)
+        self.pod_index_list_client = range (0, self.traffic_path_count*2, 2)
+        self.pod_index_list_server = range (1, self.traffic_path_count*2, 2)
 
         self.node_iface_list_client = []
         self.node_iface_list_server = []
@@ -73,7 +71,7 @@ class TlsCpsRun(TlsCsApp):
         pod_iface_index_client = 1
         pod_iface_index_server = 1
 
-        pdb.set_trace()
+        # pdb.set_trace()
         for traffic_path in self.traffic_paths:
 
             next_iface = traffic_path['client']['iface']
@@ -178,7 +176,7 @@ class TlsCpsRun(TlsCsApp):
                     , self.config_j
                     , self.pod_iface_list_client)
 
-        pdb.set_trace()
+        # pdb.set_trace()
         #start collecting stats
         server_pod_ips = list (map (lambda m: get_pod_ip(self.testbed, m)
                                             , self.pod_index_list_server))

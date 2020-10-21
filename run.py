@@ -291,7 +291,7 @@ def start_run_thread(testbed
 
     resp = requests.post(url, json=data)
 
-    pdb.set_trace()
+    # pdb.set_trace()
 
     # todo
 
@@ -373,26 +373,17 @@ def start_run(testbed
         
         pod_ip = get_pod_ip (testbed, pod_index)
         exe_alias = get_exe_alias(testbed, pod_index, runid)
-        # thd = Thread(target=start_run_thread
-        #             , args=[testbed
-        #                     , pod_index
-        #                     , pod_cfg_file
-        #                     , pod_iface_list
-        #                     , pod_ip
-        #                     , pod_port
-        #                     , exe_alias])
-        # thd.daemon = True
-        # thd.start()
-        # pod_start_threads.append(thd)
-
-        start_run_thread (testbed
+        thd = Thread(target=start_run_thread
+                    , args=[testbed
                             , pod_index
                             , pod_cfg_file
                             , pod_iface_list
                             , pod_ip
                             , pod_port
-                            , exe_alias)
-            
+                            , exe_alias])
+        thd.daemon = True
+        thd.start()
+        pod_start_threads.append(thd)            
     if pod_start_threads:
         for thd in pod_start_threads:
             thd.join()
@@ -429,7 +420,7 @@ def stop_run(testbed
                 , pod_iface_list
                 , force=False):
 
-    pdb.set_trace ()
+    # pdb.set_trace ()
 
     pod_port = RPC_PORT
 
@@ -486,10 +477,10 @@ def stop_run(testbed
 def stats_run(runid, run_status):
     mongoClient = MongoClient (DB_CSTRING)
     db = mongoClient[RESULT_DB_NAME]
+    stats_col = db[LIVE_STATS_TABLE]
 
     while run_status['running']:
         try:
-            stats_col = db[LIVE_STATS_TABLE]
             stats = stats_col.find({'runid' : runid})[0]
         except:
             stats = {}
