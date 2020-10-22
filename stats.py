@@ -28,12 +28,6 @@ def get_arguments ():
                                 , default=''
                                 , help = 'run id')
 
-    arg_parser.add_argument('--pod_port'
-                                , action="store"
-                                , type=int
-                                , default=8081
-                                , help = 'pod_port')
-
     return arg_parser.parse_args()
 
 if __name__ == '__main__':
@@ -47,5 +41,4 @@ if __name__ == '__main__':
     collect_stats (c_args.runid
                     , server_pod_ips
                     , proxy_pod_ips
-                    , client_pod_ips
-                    , c_args.pod_port)
+                    , client_pod_ips)
