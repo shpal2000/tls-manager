@@ -17,23 +17,22 @@ from .run import get_testbed_ready, start_run_stats
 import pdb
 
 class TlsCpsRun(TlsCsApp):
-    def __init__(self
-                    , runid
-                    , testbed):
+    def __init__(self, testbed):
 
         super(TlsCpsRun, self).__init__()
         self.set_testbed(testbed)
-
-        self.runid = runid
-        self.pod_pcap_dir = get_pod_pcap_dir (self.runid)
             
     def start(self
+                , runid
                 , cps
                 , cipher
                 , version
                 , srv_cert
                 , srv_key
                 , total_conn_count):
+
+        self.runid = runid
+        self.pod_pcap_dir = get_pod_pcap_dir (self.runid)
 
         self.cps = cps
         self.cipher = cipher
@@ -62,7 +61,6 @@ class TlsCpsRun(TlsCsApp):
         self.config_j = json.loads(self.config_s)
 
         if not get_testbed_ready (self.testbed):
-            #start the server pods
             resource_list = []
             resource_list.append ((self.pod_index_list_server
                                         , self.node_iface_list_server
@@ -93,27 +91,26 @@ class TlsCpsRun(TlsCsApp):
                         , server_pod_ips = server_pod_ips
                         , client_pod_ips = client_pod_ips)
         
-
-        self.run_status = {'running' : True}
-        self.stats_iter = stats_run (self.runid, self.run_status)
-
     def stop(self, force=False):
-
-        if not is_running (self.runid):
-            return (-1,  'error: {} not runing'.format (self.runid))
 
         if force:
             purge_testbed (self.testbed
                             , self.pod_index_list
                             , True)
         else:
+            if not is_running (self.runid):
+                return (-1,  'error: {} not runing'.format (self.runid))
+
             stop_run (self.testbed
                         , self.runid
                         , [ (self.pod_index_list_server, self.pod_iface_list_server)
                             , (self.pod_index_list_client, self.pod_iface_list_client)
                         ])
+        return (0, '')
 
     def stats (self):
+        if not self.stats_iter:
+            self.stats_iter = stats_run (self.runid)
         return next (self.stats_iter, None)
 
 

@@ -97,9 +97,9 @@ def set_testbed_running_status(testbed, runing):
 
 def set_run_stats_pid (runid, pid):
     registry_file = get_run_registry_file (runid)
-    testbed_info = get_registry_data (registry_file)
-    testbed_info['stats_pid'] = pid
-    set_registry_data (registry_file, testbed_info)
+    run_info = get_registry_data (registry_file)
+    run_info['stats_pid'] = pid
+    set_registry_data (registry_file, run_info)
  
 def get_testbed_runid (testbed):
     registry_file = get_testbed_registry_file (testbed)
@@ -108,6 +108,12 @@ def get_testbed_runid (testbed):
 def get_run_stats_pid (runid):
     registry_file = get_run_registry_file (runid)
     return int(get_registry_data (registry_file).get('stats_pid', 0))
+
+def get_run_testbed(runid):
+    registry_file = get_run_registry_file (runid)
+    run_info = get_registry_data (registry_file)
+    testbed = run_info['testbed']
+    return testbed
 
 def dispose_run (runid):
     registry_dir_run = get_run_registry_dir (runid)
@@ -142,7 +148,7 @@ def get_pod_traffic_config_file (runid):
     return os.path.join(get_pod_traffic_dir(runid), 'config.json')
 
 def get_pod_pcap_dir (runid):
-    return os.path.join( get_run_traffic_dir(runid),  'pcaps')
+    return os.path.join( get_run_traffic_dir(runid),  'pcaps')    
 
 def is_valid_testbed (testbed):
     ret = True
@@ -183,7 +189,7 @@ def get_stats (pod_ips):
         stats_values = map(lambda s : s.get(stats_key, 0), stats_list) 
         stats_sum[stats_key] = reduce(lambda x, y : x + y, stats_values)
 
-    return stats_sum
+    return (stats_sum, stats_list)
 
 max_tick = 1
 def collect_stats (runid
@@ -201,15 +207,21 @@ def collect_stats (runid
     while True:
         tick += 1
 
-        server_stats = get_stats (server_pod_ips)
-        proxy_stats = get_stats (proxy_pod_ips)
-        client_stats = get_stats (client_pod_ips)
+        server_stats, server_stats_list  = get_stats (server_pod_ips)
+        proxy_stats, proxy_stats_list = get_stats (proxy_pod_ips)
+        client_stats, client_stats_list = get_stats (client_pod_ips)
         
         stats_col.insert_one({'tick' : tick
                                 , 'runid' : runid
+
                                 , 'server_stats' : server_stats
                                 , 'proxy_stats' : proxy_stats
-                                , 'client_stats' : client_stats})
+                                , 'client_stats' : client_stats
+                                , 'server_stats_list' : server_stats_list
+                                , 'proxy_stats_list' : proxy_stats_list
+                                , 'client_stats_list' : client_stats_list
+                                
+                                })
         if tick > max_tick:
             stats_col.remove({'tick' : tick-max_tick})
 
@@ -314,7 +326,13 @@ def start_run(testbed
                                 , exe_alias])
             thd.daemon = True
             thd.start()
-            pod_start_threads.append(thd)            
+            pod_start_threads.append(thd)          
+            # thd = start_run_thread (testbed
+            #                     , pod_index
+            #                     , pod_cfg_file
+            #                     , pod_iface_list
+            #                     , pod_ip
+            #                     , exe_alias)            
         if pod_start_threads:
             for thd in pod_start_threads:
                 thd.join()
@@ -368,6 +386,11 @@ def stop_run(testbed
             thd.daemon = True
             thd.start()
             pod_stop_threads.append(thd)
+            # stop_run_thread(testbed
+            #                     , pod_index
+            #                     , pod_iface_list
+            #                     , pod_ip
+            #                     , exe_alias)
         if pod_stop_threads:
             for thd in pod_stop_threads:
                 thd.join()
@@ -380,12 +403,12 @@ def stop_run(testbed
 
 
 
-def stats_run(runid, run_status):
+def stats_run(runid):
     mongoClient = MongoClient (DB_CSTRING)
     db = mongoClient[RESULT_DB_NAME]
     stats_col = db[LIVE_STATS_TABLE]
 
-    while run_status['running']:
+    while is_running (runid):
         try:
             stats = stats_col.find({'runid' : runid})[0]
         except:

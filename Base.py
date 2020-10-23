@@ -9,19 +9,21 @@ from .run import start_run, init_testbed, stats_run, stop_run, get_pod_ip
 from .run import get_pod_pcap_dir, get_testbed_info, purge_testbed
 
 from .run import is_valid_testbed, is_running, get_testbed_runid
-from .run import get_testbed_ready, start_run_stats
+from .run import get_testbed_ready, start_run_stats, get_run_testbed, dispose_run
 
 
 def next_ipaddr (ip_addr, count):
     return ipaddress.ip_address(ip_addr) + count
 
-class App(object):
+class TlsApp(object):
     def __init__(self):
         self.pod_rundir_certs = os.path.join(POD_RUNDIR, 'certs')
         self.tcpdump = TCPDUMP_FLAG
         self.next_ipaddr = next_ipaddr
+        self.stats_iter = None
 
-class TlsCsApp(App):
+            
+class TlsCsApp(TlsApp):
     def __init__ (self):
         super(TlsCsApp, self).__init__()
         self.max_active = 1
@@ -44,7 +46,7 @@ class TlsCsApp(App):
         self.client_port_end = 65000
 
     def set_testbed (self, testbed):
-        
+
         self.testbed = testbed
         testbed_info = get_testbed_info (self.testbed)
         self.traffic_paths = testbed_info['traffic_paths']
@@ -62,30 +64,23 @@ class TlsCsApp(App):
         self.pod_iface_list_client = []
         self.pod_iface_list_server = []
 
-        pod_iface_index_client = 1
-        pod_iface_index_server = 1
-
         for traffic_path in self.traffic_paths:
+            traffic_path['client']['pod_iface'] = 'eth1'
+            traffic_path['server']['pod_iface'] = 'eth1'
 
             next_iface = traffic_path['client']['iface']
             if not next_iface in self.node_iface_list_client:
                 self.node_iface_list_client.append (next_iface)
                 next_macvlan = testbed_info[next_iface]['macvlan']
                 self.node_macvlan_list_client.append (next_macvlan)
-                next_pod_iface = 'eth{}'.format(pod_iface_index_client)
-                self.pod_iface_list_client.append (next_pod_iface)
-                traffic_path['client']['pod_iface'] = next_pod_iface
-                pod_iface_index_client += 1
+                self.pod_iface_list_client.append ('eth1')
 
             next_iface = traffic_path['server']['iface']
             if not next_iface in self.node_iface_list_server:
                 self.node_iface_list_server.append (next_iface)
                 next_macvlan = testbed_info[next_iface]['macvlan']
                 self.node_macvlan_list_server.append (next_macvlan)
-                next_pod_iface = 'eth{}'.format(pod_iface_index_server)
-                self.pod_iface_list_server.append (next_pod_iface)
-                traffic_path['server']['pod_iface'] = next_pod_iface
-                pod_iface_index_server += 1
+                self.pod_iface_list_server.append ('eth1')
 
             for cs_g in traffic_path['client']['client_list']:
                 cs_g['client_port_begin'] = self.client_port_begin
