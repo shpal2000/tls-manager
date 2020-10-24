@@ -1,128 +1,87 @@
-from fastapi import FastAPI, Depends, WebSocket, BackgroundTasks
-
-from fastapi.staticfiles import StaticFiles
-from fastapi.templating import Jinja2Templates
-
+from fastapi import FastAPI, BackgroundTasks
 from typing import Optional, List
 from pydantic import BaseModel
 
-from functools import lru_cache
 import asyncio
-
+import uvicorn
+import json
+import sys
+import os
 import pdb
 import time
 
-import sqlite3
-from . import crud
-from . import config
-
-from fastapi.responses import ORJSONResponse
-from fastapi.responses import HTMLResponse
-
+from traffic.TlsCpsRun import TlsCpsRun
+from traffic.admin import get_stats, stop_run, get_stats
 
 app = FastAPI()
 
-app.mount("/static", StaticFiles(directory="static"), name="static")
-
-templates = Jinja2Templates(directory="templates")
-
-
-@lru_cache
-def get_settings():
-    settings = config.Settings()
-    crud.create_tables (settings.db_file)
-    return settings
-
-@app.on_event("startup")
-def startup():
-    print ("startup")
-
-
-@app.on_event("shutdown")
-def shutdown():
-    print ("shutdown")
-
-class StartCpsReq(BaseModel):
+class StartTlsCps(BaseModel):
+    testbed: str
     runid: str
-    cipher: str
     cps: int
+    cipher: str
+    version: str
+    server_cert: str
+    server_key: str
+    total_conn_count: int
 
-class StopReq(BaseModel):
+class StopTls(BaseModel):
+    runid: str
+    force: int
+
+class StatsTls(BaseModel):
     runid: str
 
-class RunInfo(BaseModel):
-    id : str
+@app.get('/node_info')
+async def node_info():
+    return {}
 
-class ShowRunsRes(BaseModel):
-    runs: List [RunInfo]
+@app.get('/testbed')
+async def testbed_info():
+    return {}
+
+@app.post('/testbed')
+async def add_testbed():
+    return {}
+
+@app.patch('/testbed')
+async def update_testbed():
+    return {}
+
+@app.delete('/testbed')
+async def delete_testbed():
+    return {}
 
 
-@app.get('/', response_class=HTMLResponse)
-def root(settings: config.Settings = Depends (get_settings)):
-    response = '''
-<!DOCTYPE html>
-<html>
-    <head>
-        <title>Chat</title>
-    </head>
-    <body>
-        <h1>WebSocket Chat</h1>
-        <form action="" onsubmit="sendMessage(event)">
-            <input type="text" id="messageText" autocomplete="off"/>
-            <button>Send</button>
-        </form>
-        <ul id='messages'>
-        </ul>
-        <script>
-            var ws = new WebSocket("ws://localhost:5000/ws");
-            ws.onmessage = function(event) {
-                var messages = document.getElementById('messages')
-                var message = document.createElement('li')
-                var content = document.createTextNode(event.data)
-                message.appendChild(content)
-                messages.appendChild(message)
-            };
-            function sendMessage(event) {
-                var input = document.getElementById("messageText")
-                ws.send(input.value)
-                input.value = ''
-                event.preventDefault()
-            }
-        </script>
-    </body>
-</html>
-     '''
-    return HTMLResponse(content=response, status_code=200)
+@app.post('/start_tls_cps')
+async def start_tls_cps(params : StartTlsCps):
+    # pdb.set_trace()
+    nextRun = TlsCpsRun (params.testbed)
+    status = nextRun.start (params.runid
+                    , params.cps
+                    , params.cipher
+                    , params.version
+                    , params.server_cert
+                    , params.server_key
+                    , params.total_conn_count)
+    return status
 
-@app.post('/start_cps', response_class=ORJSONResponse)
-async def start_cps(params : StartCpsReq
-                    , settings: config.Settings = Depends (get_settings)):
 
-    crud.add_task(settings.db_file, params.runid, 'cps-run')
-    return params
+@app.post('/stop_tls')
+async def stop_tls(params : StopParam):
+    stop_run (params.runid)
+    return {}
 
-@app.post('/stop', response_class=ORJSONResponse)
-async def stop(params : StopReq
-                , settings: config.Settings = Depends (get_settings)):
+@app.post('/stats_tls')
+async def stp_tls(params : StopParam):
+    return get_stats (params.runid)
 
-    crud.del_task(settings.db_file, params.runid)
-    return params
 
-@app.get('/show_runs', response_class=ORJSONResponse, response_model=ShowRunsRes)
-async def show_runs(settings: config.Settings = Depends (get_settings)):
-    return {"runs" : crud.get_tasks(settings.db_file)}
-
-# def write_notification():
-#     print ('here')
-
-# @app.get("/test")
-# async def test(background_tasks: BackgroundTasks):
-#     background_tasks.add_task(write_notification)
-#     return {"message": "Notification sent in the background"}
-
-@app.websocket("/ws")
-async def websocket_endpoint(websocket: WebSocket):
-    await websocket.accept()
-    while True:
-        await asyncio.sleep(0.1)
-        await websocket.send_text(f"hi there")
+if __name__ == '__main__':
+    node_ip = sys.argv[1]
+    node_port = int(sys.argv[2])
+    asyncio.run (uvicorn.run(app
+                                , host=node_ip
+                                , port=node_port
+                                , loop='asyncio'
+                                , debug=False))
