@@ -18,9 +18,7 @@ import pdb
 
 class TlsCpsRun(TlsCsApp):
     def __init__(self, testbed):
-
-        super(TlsCpsRun, self).__init__()
-        self.set_testbed(testbed)
+        super(TlsCpsRun, self).__init__(testbed)
             
     def start(self
                 , runid
@@ -31,7 +29,8 @@ class TlsCpsRun(TlsCsApp):
                 , srv_key
                 , total_conn_count):
 
-        self.runid = runid
+        self.set_runid(runid)
+
         self.pod_pcap_dir = get_pod_pcap_dir (self.runid)
 
         self.cps = cps
@@ -46,17 +45,7 @@ class TlsCpsRun(TlsCsApp):
         self.cps_tp = self.cps / self.traffic_path_count
         self.total_conn_count_tp = self.total_conn_count / self.traffic_path_count
 
-        if not is_valid_testbed (self.testbed):
-            return (-1,  'invalid testbed {}'.format (self.testbed))
-
-        if is_running (self.runid):
-            return (-1,  'error: {} already runing'.format (self.runid))
     
-        testbed_runid = get_testbed_runid (self.testbed)
-        if testbed_runid:
-            return (-1,  'error: testbed in use; running {}'.format (testbed_runid))
-
-
         self.config_s = TlsCpsRun.J2Template.render(PARAMS = vars(self))
         self.config_j = json.loads(self.config_s)
 

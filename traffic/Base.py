@@ -15,17 +15,43 @@ from .run import get_testbed_ready, start_run_stats, get_run_testbed, dispose_ru
 def next_ipaddr (ip_addr, count):
     return ipaddress.ip_address(ip_addr) + count
 
+
+class TlsAppError(Exception):
+    pass
+
+class SartCheckError(TlsAppError):
+    def __init__(self, status, message):
+        self.status = status
+        self.message = message
+
 class TlsApp(object):
-    def __init__(self):
+    def __init__(self, testbed):
         self.pod_rundir_certs = os.path.join(POD_RUNDIR, 'certs')
         self.tcpdump = TCPDUMP_FLAG
         self.next_ipaddr = next_ipaddr
         self.stats_iter = None
+        self.testbed = testbed
+        self.runid = ''
 
-            
+    def set_runid(self, runid):
+
+        if is_running (runid):
+            raise SartCheckError(-1,  'error: {} already runing'.format (runid))
+
+        if self.runid:
+            raise SartCheckError(-1,  'error: testbed {} in use; running {}'.format \
+                                                        (self.testbed, self.runid))
+
+        if not is_valid_testbed (self.testbed):
+            raise SartCheckError(-1,  'invalid testbed {}'.format (self.testbed))
+
+
+        self.runid = runid
+
+
 class TlsCsApp(TlsApp):
-    def __init__ (self):
-        super(TlsCsApp, self).__init__()
+    def __init__ (self, testbed):
+        super(TlsCsApp, self).__init__(testbed)
         self.max_active = 1
         self.max_pipeline = 1
         self.tcp_snd_buff = 0
@@ -44,12 +70,15 @@ class TlsCsApp(TlsApp):
         self.emulation_id = 0
         self.client_port_begin = 5000
         self.client_port_end = 65000
+        self.set_testbed(testbed)
 
     def set_testbed (self, testbed):
 
-        self.testbed = testbed
-        testbed_info = get_testbed_info (self.testbed)
-        self.traffic_paths = testbed_info['traffic_paths']
+        self.testbed_info = get_testbed_info (self.testbed)
+        
+        self.runid = self.testbed_info.get('runing', '')
+
+        self.traffic_paths = self.testbed_info['traffic_paths']
         self.traffic_path_count = len (self.traffic_paths)
         self.pod_index_list = range (self.traffic_path_count * 2)
         self.pod_index_list_client = range (0, self.traffic_path_count*2, 2)
@@ -71,14 +100,14 @@ class TlsCsApp(TlsApp):
             next_iface = traffic_path['client']['iface']
             if not next_iface in self.node_iface_list_client:
                 self.node_iface_list_client.append (next_iface)
-                next_macvlan = testbed_info[next_iface]['macvlan']
+                next_macvlan = self.testbed_info[next_iface]['macvlan']
                 self.node_macvlan_list_client.append (next_macvlan)
                 self.pod_iface_list_client.append ('eth1')
 
             next_iface = traffic_path['server']['iface']
             if not next_iface in self.node_iface_list_server:
                 self.node_iface_list_server.append (next_iface)
-                next_macvlan = testbed_info[next_iface]['macvlan']
+                next_macvlan = self.testbed_info[next_iface]['macvlan']
                 self.node_macvlan_list_server.append (next_macvlan)
                 self.pod_iface_list_server.append ('eth1')
 
