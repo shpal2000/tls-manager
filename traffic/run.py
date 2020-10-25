@@ -17,6 +17,7 @@ from pymongo import MongoClient
 from .config import DB_CSTRING, REGISTRY_DB_NAME, RESULT_DB_NAME, NODE_RUNDIR
 from .config import STATS_TABLE, CSTATE_TABLE, LIVE_STATS_TABLE, POD_RUNDIR
 from .config import RPC_IP_VETH1, RPC_IP_VETH2, RPC_PORT, NODE_SRCDIR, POD_SRCDIR
+from .config import TESTBED_TABLE, RUN_TABLE
 
 def get_pod_name (testbed, pod_index):
     return "{}-pod-{}".format (testbed, pod_index+1)
@@ -29,7 +30,7 @@ def get_pod_ip (testbed, pod_index):
     cmd_str = "docker inspect --format='{{.NetworkSettings.IPAddress}}' " + pod_name
     return subprocess.check_output(cmd_str, shell=True, close_fds=True).decode("utf-8").strip()
 
-def init_testbed(testbed, resource_list):
+def start_testbed(testbed, resource_list):
 
     rundir_map = "--volume={}:{}".format (NODE_RUNDIR, POD_RUNDIR)
     srcdir_map = "--volume={}:{}".format (NODE_SRCDIR, POD_SRCDIR)
@@ -64,79 +65,103 @@ def init_testbed(testbed, resource_list):
 
             cmd_str = "sudo docker exec -d {} python3 /usr/local/bin/rpc_proxy_main.py {} {}".format(pod_name, pod_ip, RPC_PORT)
             os.system (cmd_str)
+    mark_testbed_ready (testbed)
 
-    set_testbed_ready_status (testbed, ready=1)
-
-def dispose_testbed(testbed, pod_index_list):
+def stop_testbed(testbed, pod_index_list):
     for pod_index in pod_index_list:
         pod_name = get_pod_name (testbed, pod_index)
         cmd_str = "sudo docker rm -f {}".format (pod_name)
         os.system (cmd_str)
+    mark_testbed_not_ready (testbed)
 
+def is_valid_testbed (testbed):
+    mongoClient = MongoClient (DB_CSTRING)
+    db = mongoClient[REGISTRY_DB_NAME]
+    testbed_table = db[TESTBED_TABLE]
+    if testbed_table.find_one({'testbed' : testbed}):
+        return True
+    return False
 
-def get_registry_data (registry_file):
-    with open(registry_file) as f:
-        registry_data = json.load(f)
-    return registry_data
+def is_testbed_ready (testbed):
+    mongoClient = MongoClient (DB_CSTRING)
+    db = mongoClient[REGISTRY_DB_NAME]
+    testbed_table = db[TESTBED_TABLE]
+    return testbed_table.find_one({'testbed' : testbed}).get('ready', 0)
 
-def set_registry_data (registry_file, registry_data):
-    with open(registry_file, 'w') as f:
-        json.dump(registry_data, f)
+def get_testbed_info (testbed):
+    mongoClient = MongoClient (DB_CSTRING)
+    db = mongoClient[REGISTRY_DB_NAME]
+    testbed_table = db[TESTBED_TABLE]
+    return testbed_table.find_one({'testbed' : testbed})
 
-def set_testbed_ready_status(testbed, ready):
-    registry_file = get_testbed_registry_file (testbed)
-    testbed_info = get_registry_data (registry_file)
-    testbed_info['ready'] = ready
-    set_registry_data (registry_file, testbed_info)
+def mark_testbed_ready(testbed):
+    mongoClient = MongoClient (DB_CSTRING)
+    db = mongoClient[REGISTRY_DB_NAME]
+    testbed_table = db[TESTBED_TABLE]
+    testbed_table.update({'testbed' : testbed}
+                            , {"$set": { 'ready': 1 }})
 
-def set_testbed_running_status(testbed, runing):
-    registry_file = get_testbed_registry_file (testbed)
-    testbed_info = get_registry_data (registry_file)
-    testbed_info['runing'] = runing
-    set_registry_data (registry_file, testbed_info)
-
-def set_run_stats_pid (runid, pid):
-    registry_file = get_run_registry_file (runid)
-    run_info = get_registry_data (registry_file)
-    run_info['stats_pid'] = pid
-    set_registry_data (registry_file, run_info)
+def mark_testbed_not_ready(testbed):
+    mongoClient = MongoClient (DB_CSTRING)
+    db = mongoClient[REGISTRY_DB_NAME]
+    testbed_table = db[TESTBED_TABLE]
+    testbed_table.update({'testbed' : testbed}
+                            , {"$set": { 'ready': 0}})
  
 def get_testbed_runid (testbed):
-    registry_file = get_testbed_registry_file (testbed)
-    return  get_registry_data (registry_file).get('runing', '')
+    mongoClient = MongoClient (DB_CSTRING)
+    db = mongoClient[REGISTRY_DB_NAME]
+    testbed_table = db[TESTBED_TABLE]
+    return testbed_table.find_one({'testbed' : testbed}).get('runing', '')
+
+def set_run_stats_pid (runid, stats_pid):
+    mongoClient = MongoClient (DB_CSTRING)
+    db = mongoClient[REGISTRY_DB_NAME]
+    run_table = db[RUN_TABLE]
+    run_table.update({'runid' : runid}
+                        , {"$set": { "stats_pid": stats_pid }})
 
 def get_run_stats_pid (runid):
-    registry_file = get_run_registry_file (runid)
-    return int(get_registry_data (registry_file).get('stats_pid', 0))
+    mongoClient = MongoClient (DB_CSTRING)
+    db = mongoClient[REGISTRY_DB_NAME]
+    run_table = db[RUN_TABLE]
+    return run_table.find_one({'runid' : runid}).get('stats_pid', 0)
+    
+def register_run (testbed, runid):
+    mongoClient = MongoClient (DB_CSTRING)
+    db = mongoClient[REGISTRY_DB_NAME]
 
-def get_run_testbed(runid):
-    registry_file = get_run_registry_file (runid)
-    run_info = get_registry_data (registry_file)
-    testbed = run_info['testbed']
-    return testbed
+    run_table = db[RUN_TABLE]
+    run_table.insert({'runid' : runid, 'testbed' : testbed})
 
-def dispose_run (runid):
-    registry_dir_run = get_run_registry_dir (runid)
-    os.system ( 'rm -rf {}'.format(registry_dir_run) )
+    testbed_table = db[TESTBED_TABLE]
+    testbed_table.update({'testbed' : testbed}
+                            , {"$set": { 'runing': runid }})
+
+def unregister_run (runid):
+    mongoClient = MongoClient (DB_CSTRING)
+    db = mongoClient[REGISTRY_DB_NAME]
+    run_table = db[RUN_TABLE]
+    run_table.remove({'runid' : runid})
+
+    testbed_table = db[TESTBED_TABLE]
+    testbed_table.update({'runing' : runid}
+                            , {"$set": { 'runing': '' }})
+
 
 def is_running (runid):
-    registry_file = get_run_registry_file (runid)
-    return os.path.exists(registry_file)
-
-def get_testbed_registry_file (testbed):
-    return os.path.join(NODE_RUNDIR, 'registry', 'testbeds', testbed, 'config.json')
-
-def get_run_registry_dir (runid):
-    return os.path.join(NODE_RUNDIR, 'registry', 'runs', runid)
-
-def get_run_registry_file (runid):
-    return os.path.join(get_run_registry_dir (runid), 'config.json')
-
-def get_run_stats_pid_file (runid):
-    return os.path.join(get_run_registry_dir (runid), 'stats_pid.txt')
+    mongoClient = MongoClient (DB_CSTRING)
+    db = mongoClient[REGISTRY_DB_NAME]
+    run_table = db[RUN_TABLE]
+    if run_table.find_one ({'runid' : runid}):
+        return True
+    return False
 
 def get_run_traffic_dir (runid):
     return os.path.join(NODE_RUNDIR, 'traffic', runid)
+
+def get_run_traffic_stats_pid_file (runid):
+    return os.path.join(get_run_traffic_dir (runid), 'stats_pid.txt')
 
 def get_run_traffic_config_file (runid):
     return os.path.join( get_run_traffic_dir(runid),  'config.json')
@@ -149,27 +174,6 @@ def get_pod_traffic_config_file (runid):
 
 def get_pod_pcap_dir (runid):
     return os.path.join( get_run_traffic_dir(runid),  'pcaps')    
-
-def is_valid_testbed (testbed):
-    ret = True
-    registry_file = get_testbed_registry_file (testbed)
-    try:
-        get_registry_data (registry_file)
-    except:
-        ret = False
-    return ret
-
-def get_testbed_info (testbed):
-    registry_file = get_testbed_registry_file (testbed)
-    try:
-        ret = get_registry_data (registry_file)
-    except:
-        ret = {}
-    return ret
-
-def get_testbed_ready (testbed):
-    registry_file = get_testbed_registry_file (testbed)
-    return  get_registry_data (registry_file).get('ready', 0)
 
 def get_stats (pod_ips):
     stats_list = []
@@ -257,8 +261,7 @@ def start_run_stats (runid
                         , proxy_pod_ips=[]
                         , client_pod_ips=[]):
 
-    stats_pid_file = get_run_stats_pid_file (runid)
-    registry_file_run = get_run_registry_file (runid)
+    stats_pid_file = get_run_traffic_stats_pid_file (runid)
 
     pod_ips = ''
     if server_pod_ips:
@@ -275,7 +278,6 @@ def start_run_stats (runid
         set_run_stats_pid (runid, f.read().strip())
 
 def stop_run_stats(runid):
-    registry_file_run = get_run_registry_file (runid)
     stats_pid = get_run_stats_pid (runid)
     if stats_pid:
         try:
@@ -288,25 +290,16 @@ def start_run(testbed
                 , runid
                 , resource_list
                 , node_cfg_j):
-
-    set_testbed_running_status (testbed, runid)
-
+    
     node_cfg_dir = get_run_traffic_dir(runid)
     node_cfg_file = get_run_traffic_config_file (runid)
-    registry_dir_run = get_run_registry_dir (runid)
-    registry_file_run = get_run_registry_file (runid)
 
-    os.system ('mkdir -p {}'.format(registry_dir_run))
     os.system ( 'rm -rf {}'.format(node_cfg_dir) )
     os.system ( 'mkdir -p {}'.format(node_cfg_dir) )
     os.system ( 'mkdir -p {}'.format(os.path.join(node_cfg_dir, 'pcaps')) )
-    os.system ( 'mkdir -p {}'.format(os.path.join(node_cfg_dir, 'stats')) )
     os.system ( 'mkdir -p {}'.format(os.path.join(node_cfg_dir, 'logs')) )
 
-    with open(registry_file_run, 'w') as f:
-        json.dump({'testbed' : testbed}, f)
-
-    config_s = json.dumps(node_cfg_j, indent=4)
+    config_s = json.dumps(node_cfg_j, indent=2)
     with open(node_cfg_file, 'w') as f:
         f.write(config_s)
 
@@ -338,6 +331,9 @@ def start_run(testbed
                 thd.join()
             time.sleep(1)
 
+    
+    register_run (testbed, runid)
+
     return (0, '')
 
 
@@ -364,11 +360,6 @@ def stop_run(testbed
                 , resource_list):
 
     # pdb.set_trace ()
-
-    registry_dir_run = get_run_registry_dir (runid)
-    registry_file_run = get_run_registry_file (runid)
-
-    registry_file_testbed = get_testbed_registry_file (testbed)
 
     node_cfg_file = get_run_traffic_config_file (runid)
 
@@ -397,13 +388,12 @@ def stop_run(testbed
             time.sleep(1)
 
     stop_run_stats (runid)
-    dispose_run (runid)
-    set_testbed_running_status (testbed, runing='')
+    unregister_run (runid)
     return (0, '')
 
 
 
-def stats_run(runid):
+def run_stats_iter(runid):
     mongoClient = MongoClient (DB_CSTRING)
     db = mongoClient[RESULT_DB_NAME]
     stats_col = db[LIVE_STATS_TABLE]
@@ -419,17 +409,12 @@ def purge_testbed(testbed
                 , pod_index_list
                 , force):
 
-    registry_file_testbed = get_testbed_registry_file (testbed)
-    
     testbed_runid = get_testbed_runid (testbed)
     if testbed_runid and not force:
         print ('error: {} testbed in use runing {}'.format(testbed, testbed_runid))
         return
     
     runid = testbed_runid
-    registry_dir_run = get_run_registry_dir (runid)
-    registry_file_run = get_run_registry_file (runid)
-
     if is_running (runid):
         stats_pid = get_run_stats_pid (runid)
         if stats_pid:
@@ -438,8 +423,6 @@ def purge_testbed(testbed
             except:
                 pass
     
-    dispose_testbed (testbed, pod_index_list)
-    set_testbed_running_status (testbed, runing='')
-    set_testbed_ready_status (testbed, ready=0)
-    dispose_run (runid)
+    stop_testbed (testbed, pod_index_list)
+    unregister_run (runid)
 

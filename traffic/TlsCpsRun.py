@@ -7,14 +7,10 @@ import jinja2
 import json
 import uuid
 
-from .run import start_run, init_testbed, stats_run, stop_run, get_pod_ip
-from .run import get_pod_pcap_dir, get_testbed_info, purge_testbed
+from .run import start_run, start_testbed, run_stats_iter, stop_run, purge_testbed
+from .run import get_pod_pcap_dir, get_testbed_info, get_pod_ip, is_valid_testbed
+from .run import is_running, get_testbed_runid, is_testbed_ready, start_run_stats
 
-from .run import is_valid_testbed, is_running, get_testbed_runid
-from .run import get_testbed_ready, start_run_stats
-
-
-import pdb
 
 class TlsCpsRun(TlsCsApp):
     def __init__(self, testbed):
@@ -49,7 +45,7 @@ class TlsCpsRun(TlsCsApp):
         self.config_s = TlsCpsRun.J2Template.render(PARAMS = vars(self))
         self.config_j = json.loads(self.config_s)
 
-        if not get_testbed_ready (self.testbed):
+        if not is_testbed_ready (self.testbed):
             resource_list = []
             resource_list.append ((self.pod_index_list_server
                                         , self.node_iface_list_server
@@ -58,7 +54,7 @@ class TlsCpsRun(TlsCsApp):
                                         , self.node_iface_list_client
                                         , self.node_macvlan_list_client))
 
-            init_testbed (self.testbed, resource_list)
+            start_testbed (self.testbed, resource_list)
 
         #start servers and clients
         start_run (self.testbed
@@ -99,7 +95,7 @@ class TlsCpsRun(TlsCsApp):
 
     def stats (self):
         if not self.stats_iter:
-            self.stats_iter = stats_run (self.runid)
+            self.stats_iter = run_stats_iter (self.runid)
         return next (self.stats_iter, None)
 
 
