@@ -5,10 +5,11 @@ from .Base import TlsCsApp
 import os
 import jinja2
 import json
-import uuid
+
 
 class TlsCpsRun(TlsCsApp):
     def __init__(self):
+
         super().__init__()
             
     def start(self
@@ -21,7 +22,7 @@ class TlsCpsRun(TlsCsApp):
                 , srv_key
                 , total_conn_count):
         
-        self.init(testbed, runid)
+        self.start_init(testbed, runid)
 
         self.cps = cps
         self.cipher = cipher
@@ -35,57 +36,13 @@ class TlsCpsRun(TlsCsApp):
 
         self.cps_tp = self.cps / self.testbedI.traffic_path_count
 
-        self.total_conn_count_tp 
-            = self.total_conn_count / self.testbedI.traffic_path_count
+        self.total_conn_count_tp = \
+            self.total_conn_count / self.testbedI.traffic_path_count
 
         config_s = TlsCpsRun.J2Template.render(PARAMS = vars(self))
         config_j = json.loads(config_s)
 
-        self.run (config_j)
-
-        #start servers and clients
-        start_run (self.testbed
-                    , self.runid
-                    , [ (self.pod_index_list_server, self.pod_iface_list_server)
-                        , (self.pod_index_list_client, self.pod_iface_list_client)]
-                    , self.config_j)
-
-
-        # pdb.set_trace()
-        #start collecting stats
-        server_pod_ips = list (map (lambda m: get_pod_ip(self.testbed, m)
-                                            , self.pod_index_list_server))
-
-        client_pod_ips = list (map (lambda m: get_pod_ip(self.testbed, m)
-                                            , self.pod_index_list_client))
-
-        start_run_stats (self.runid
-                        , server_pod_ips = server_pod_ips
-                        , client_pod_ips = client_pod_ips)
-        
-    def stop(self, force=False):
-
-        if force:
-            purge_testbed (self.testbed
-                            , self.pod_index_list
-                            , True)
-        else:
-            if not is_running (self.runid):
-                return (-1,  'error: {} not runing'.format (self.runid))
-
-            stop_run (self.testbed
-                        , self.runid
-                        , [ (self.pod_index_list_server, self.pod_iface_list_server)
-                            , (self.pod_index_list_client, self.pod_iface_list_client)
-                        ])
-                        
-        self.clear_runid()
-        return (0, '')
-
-    def stats (self):
-        if not self.stats_iter:
-            self.stats_iter = run_stats_iter (self.runid)
-        return next (self.stats_iter, None)
+        self.start_run (config_j)
 
 
     J2Template = jinja2.Template('''{
@@ -118,8 +75,8 @@ class TlsCpsRun(TlsCsApp):
                                         "srv_port" : {{PARAMS.testbedI.traffic_paths[traffic_path_index]['client']['client_list'][loop.index0]['server_port']}},
                                         "clnt_ip_begin" : "{{PARAMS.testbedI.traffic_paths[traffic_path_index]['client']['client_list'][loop.index0]['client_ip_begin']}}",
                                         "clnt_ip_end" : "{{PARAMS.next_ipaddr(PARAMS.testbedI.traffic_paths[traffic_path_index]['client']['client_list'][loop.index0]['client_ip_begin'], PARAMS.testbedI.traffic_paths[traffic_path_index]['client']['client_list'][loop.index0]['client_ip_count']-1)}}",
-                                        "clnt_port_begin" : {{PARAMS.testbedI.traffic_paths[traffic_path_index]['client']['client_list'][loop.index0]['client_port_begin']}},
-                                        "clnt_port_end" : {{PARAMS.testbedI.traffic_paths[traffic_path_index]['client']['client_list'][loop.index0]['client_port_end']}},
+                                        "clnt_port_begin" : {{PARAMS.client_port_begin}},
+                                        "clnt_port_end" : {{PARAMS.client_port_end}},
                                         "cipher" : "{{PARAMS.cipher}}",
                                         "tls_version" : "{{PARAMS.version}}",
                                         "close_type" : "{{PARAMS.close_type}}",
@@ -141,12 +98,12 @@ class TlsCpsRun(TlsCsApp):
                     ],
 
                     "zone_cmds" : [
-                        "ip link set dev {{PARAMS.testbedI.pod_iface]}} up",
-                        "ifconfig {{PARAMS.testbedI.pod_iface]}} hw ether {{PARAMS.testbedI.traffic_paths[traffic_path_index]['client']['gw_mac']}}",
-                        "ip route add default dev {{PARAMS.testbedI.pod_iface]}} table 200",
+                        "ip link set dev {{PARAMS.testbedI.pod_iface}} up",
+                        "ifconfig {{PARAMS.testbedI.pod_iface}} hw ether {{PARAMS.testbedI.traffic_paths[traffic_path_index]['client']['gw_mac']}}",
+                        "ip route add default dev {{PARAMS.testbedI.pod_iface}} table 200",
                         "ip -4 route add local {{PARAMS.testbedI.traffic_paths[traffic_path_index]['client']['subnets'][0]}} dev lo",
                         "ip rule add from {{PARAMS.testbedI.traffic_paths[traffic_path_index]['client']['subnets'][0]}} table 200",
-                        "tcpdump -i {{PARAMS.testbedI.pod_iface]}} {{PARAMS.tcpdump}} -w {{PARAMS.pod_pcap_dir.rstrip('/')}}/traffic_path_{{traffic_path_index+1}}_client.pcap &"
+                        "tcpdump -i {{PARAMS.testbedI.pod_iface}} {{PARAMS.tcpdump}} -w {{PARAMS.pod_pcap_dir.rstrip('/')}}/traffic_path_{{traffic_path_index+1}}_client.pcap &"
                     ]
                 }
                 ,
