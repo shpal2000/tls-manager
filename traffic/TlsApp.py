@@ -86,7 +86,7 @@ def start_run_stats (runid
     if client_pod_ips:
         pod_ips += ' --client_pod_ips ' + ':'.join(client_pod_ips)
 
-    os.system('python3 -m tlspack.TlsApp --runid {} {} & echo $! > {}'. \
+    os.system('python3 -m Tgen.TlsApp --runid {} {} & echo $! > {}'. \
                                 format (runid, pod_ips, stats_pid_file))
 
     stats_pid = 0
@@ -306,8 +306,27 @@ class TlsCsAppTestbed (TlsAppTestbed):
         self.ready = 1
 
 
+    def stop_pod(self, pod_index):
+        pod_name = get_pod_name (self.testbed, pod_index)
+        cmd_str = "sudo docker rm -f {}".format (pod_name)
+        os.system (cmd_str)
+
+
     def stop(self):
-        pass
+
+        testbed_info = self.get_info()
+
+        pod_index = -1
+        for traffic_path in testbed_info['traffic_paths']:
+            #client
+            pod_index += 1
+            self.stop_pod(pod_index)
+
+            #server
+            pod_index += 1
+            self.stop_pod(pod_index)
+
+        self.ready = 0
 
 
 class TlsApp(object):
@@ -374,6 +393,30 @@ class TlsApp(object):
             yield stats
 
 
+    @staticmethod
+    def purge_testbed (testbed):
+
+        testbed_class_name = TlsAppTestbed(testbed).type + 'Testbed'
+        testbed_class = getattr(sys.modules[__name__], testbed_class_name)
+        _testbedI = testbed_class (testbed)
+
+        if _testbedI.runid:
+            TlsApp.stop_run (_testbedI.runid)
+
+        _testbedI.stop()
+    
+
+    @staticmethod
+    def run_list ():
+        mongoClient = MongoClient (DB_CSTRING)
+        db = mongoClient[REGISTRY_DB_NAME]
+        run_table = db[RUN_TABLE]
+        running_app_list = run_table.find ({})
+        if not running_app_list:
+            return []
+        return list (running_app_list)
+
+
     def init_run(self, testbed, runid):
 
         # runid info
@@ -403,6 +446,7 @@ class TlsApp(object):
         # testbed readiness
         if not _testbedI.ready:
             _testbedI.start()
+            time.sleep (30)
 
         self.runI = _runI
         self.testbedI = _testbedI
