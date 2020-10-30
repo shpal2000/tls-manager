@@ -10,6 +10,7 @@ LIVE_STATS_TABLE = 'tgen_live_stats'
 
 RUN_TABLE = 'run_table'
 TESTBED_TABLE = 'testbed_table'
+LOG_TABLE = 'log_table'
 
 
 RPC_IP_VETH1 = '192.168.1.1'
