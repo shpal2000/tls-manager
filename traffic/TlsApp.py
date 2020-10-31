@@ -273,6 +273,12 @@ class TlsCsAppTestbed (TlsAppTestbed):
         cmd_str = "sudo docker exec -d {} echo '/rundir/cores/core.%t.%e.%p' | tee /proc/sys/kernel/core_pattern".format(pod_name)
         os.system (cmd_str)
 
+        cmd_str = "sudo docker exec -d {} cp -f /rundir/lib/librpc_server.so /usr/local/lib/".format(pod_name)
+        os.system (cmd_str)
+
+        cmd_str = "sudo docker exec -d {} cp -f /rundir/lib/libev_sock.so /usr/local/lib/".format(pod_name)
+        os.system (cmd_str)
+
         cmd_str = "sudo docker exec -d {} cp -f /rundir/bin/tlspack.exe /usr/local/bin".format(pod_name)
         os.system (cmd_str)
 

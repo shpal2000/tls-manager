@@ -41,7 +41,6 @@ class TlsCpsApp(TlsCsApp):
 
 
         config_t = jinja2.Template('''{
-            "app_module" : "tls",
             "zones" : [
                 {% set ns = namespace(cs_grp_count=0, srv_count=0) %}
                 {%- for traffic_path_index in range(0, PARAMS.testbedI.traffic_path_count) %}
@@ -52,6 +51,7 @@ class TlsCpsApp(TlsCsApp):
                         "app_list" : [
                             {
                                 "app_type" : "tls_client",
+                                "app_lib" : "/rundir/lib/libtls_client.so",
                                 "app_label" : "tls_client_{{traffic_path_index+1}}",
                                 "enable" : 1,
                                 "conn_per_sec" : {{PARAMS.cps_tp}},
@@ -109,6 +109,7 @@ class TlsCpsApp(TlsCsApp):
                         "app_list" : [
                             {
                                 "app_type" : "tls_server",
+                                "app_lib" : "/rundir/lib/libtls_server.so",
                                 "app_label" : "tls_server_{{traffic_path_index+1}}",
                                 "enable" : 1,
                                 "srv_list" : [
