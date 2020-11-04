@@ -7,11 +7,33 @@ import jinja2
 import json
 
 
-class TlsCpsApp(TlsCsApp):
+class TlsCps(TlsCsApp):
 
     def __init__(self):
         super().__init__()
-            
+
+        self.client_module = 'libtls_client_perf.so'
+        self.server_module = 'libtls_server_perf.so'
+
+        self.max_active = 100
+        self.max_pipeline = 100
+        self.tcp_snd_buff = 0
+        self.tcp_rcv_buff = 0
+        self.app_snd_buff = 0
+        self.app_rcv_buff = 0
+        self.app_next_write = 0
+        self.app_cs_starttls_len = 0
+        self.app_sc_starttls_len = 0
+        self.app_cs_data_len = 128
+        self.app_sc_data_len = 128
+        self.total_conn_count = 0
+        self.close_type = 'fin'
+        self.close_notify = 'no_send'
+        self.client_port_begin = 5000
+        self.client_port_end = 65000
+        self.resumption_count = 10
+        self.session_cache = "server"
+
     def start(self
                 , testbed
                 , runid
@@ -20,25 +42,27 @@ class TlsCpsApp(TlsCsApp):
                 , version
                 , srv_cert
                 , srv_key
+                , resumption_count
+                , session_cache
                 , total_conn_count):
         
         self.init_run(testbed, runid)
 
-        self.cps = cps
+        self.cps = cps / self.testbedI.traffic_path_count
+        if  self.cps == 0:
+            self.cps = 1
+
         self.cipher = cipher
         self.version = version
-        self.srv_cert = os.path.join(self.pod_rundir_certs, srv_cert)
-        self.srv_key = os.path.join(self.pod_rundir_certs, srv_key)
-        self.total_conn_count = total_conn_count
+        self.srv_cert = os.path.join(self.pod_certs_dir, srv_cert)
+        self.srv_key = os.path.join(self.pod_certs_dir, srv_key)
 
-        self.max_active_tp = 100
-        self.max_pipeline_tp = 100
-
-        self.cps_tp = self.cps / self.testbedI.traffic_path_count
-
-        self.total_conn_count_tp = \
-            self.total_conn_count / self.testbedI.traffic_path_count
-
+        self.total_conn_count = total_conn_count / self.testbedI.traffic_path_count
+        if self.total_conn_count == 0 and total_conn_count > 0:
+            self.total_conn_count = 1
+    
+        self.resumption_count = resumption_count
+        self.session_cache = session_cache
 
         config_t = jinja2.Template('''{
             "zones" : [
@@ -50,14 +74,14 @@ class TlsCpsApp(TlsCsApp):
                         "enable" : 1,
                         "app_list" : [
                             {
-                                "app_type" : "tls_client",
-                                "app_lib" : "/rundir/lib/libtls_client.so",
+                                "app_type" : "tls_client_perf",
+                                "app_lib" : "{{PARAMS.pod_lib_dir.rstrip('/')}}/{{PARAMS.client_module}}",
                                 "app_label" : "tls_client_{{traffic_path_index+1}}",
                                 "enable" : 1,
-                                "conn_per_sec" : {{PARAMS.cps_tp}},
-                                "max_pending_conn_count" : {{PARAMS.max_pipeline_tp}},
-                                "max_active_conn_count" : {{PARAMS.max_active_tp}},
-                                "total_conn_count" : {{PARAMS.total_conn_count_tp}},
+                                "conn_per_sec" : {{PARAMS.cps}},
+                                "max_pending_conn_count" : {{PARAMS.max_pipeline}},
+                                "max_active_conn_count" : {{PARAMS.max_active}},
+                                "total_conn_count" : {{PARAMS.total_conn_count}},
                                 "cs_grp_list" : [
                                     {% set ns.cs_grp_count = 0 %}
                                     {%- for next_client_list in PARAMS.testbedI.traffic_paths[traffic_path_index]['client']['client_list'] %}
@@ -85,8 +109,9 @@ class TlsCpsApp(TlsCsApp):
                                             "sc_data_len" : {{PARAMS.app_sc_data_len}},
                                             "cs_start_tls_len" : {{PARAMS.app_cs_starttls_len}},
                                             "sc_start_tls_len" : {{PARAMS.app_sc_starttls_len}},
-                                            "session_resumption" : {{PARAMS.session_resumption}}
-                                        }
+                                            "resumption_count" : {{PARAMS.resumption_count}},
+                                            "session_cache" : "{{PARAMS.session_cache}}"
+                                       }
                                     {%- endfor %}                         
                                 ]
                             }
@@ -108,8 +133,8 @@ class TlsCpsApp(TlsCsApp):
                         "enable" : 1,
                         "app_list" : [
                             {
-                                "app_type" : "tls_server",
-                                "app_lib" : "/rundir/lib/libtls_server.so",
+                                "app_type" : "tls_server_perf",
+                                "app_lib" : "{{PARAMS.pod_lib_dir.rstrip('/')}}/{{PARAMS.server_module}}",
                                 "app_label" : "tls_server_{{traffic_path_index+1}}",
                                 "enable" : 1,
                                 "srv_list" : [
@@ -120,7 +145,6 @@ class TlsCpsApp(TlsCsApp):
                                         {
                                             "srv_label" : "{{PARAMS.testbedI.traffic_paths[traffic_path_index]['server']['server_list'][loop.index0]['label']}}",
                                             "enable" : 1,
-                                            "emulation_id": {{PARAMS.emulation_id}},
                                             "srv_ip" : "{{PARAMS.testbedI.traffic_paths[traffic_path_index]['server']['server_list'][loop.index0]['server_ip']}}",
                                             "srv_port" : {{PARAMS.testbedI.traffic_paths[traffic_path_index]['server']['server_list'][loop.index0]['server_port']}},
                                             "srv_cert" : "{{PARAMS.srv_cert}}",
@@ -138,8 +162,9 @@ class TlsCpsApp(TlsCsApp):
                                             "sc_data_len" : {{PARAMS.app_sc_data_len}},
                                             "cs_start_tls_len" : {{PARAMS.app_cs_starttls_len}},
                                             "sc_start_tls_len" : {{PARAMS.app_sc_starttls_len}},
-                                            "session_resumption" : {{PARAMS.session_resumption}}
-                                        }
+                                            "resumption_count" : {{PARAMS.resumption_count}},
+                                            "session_cache" : "{{PARAMS.session_cache}}"
+                                       }
                                     {%- endfor %}
                                 ]
                             }

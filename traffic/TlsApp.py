@@ -86,7 +86,7 @@ def start_run_stats (runid
     if client_pod_ips:
         pod_ips += ' --client_pod_ips ' + ':'.join(client_pod_ips)
 
-    os.system('python3 -m Tgen.TlsApp --runid {} {} & echo $! > {}'. \
+    os.system('python3 -m tgen.TlsApp --runid {} {} & echo $! > {}'. \
                                 format (runid, pod_ips, stats_pid_file))
 
     stats_pid = 0
@@ -273,10 +273,10 @@ class TlsCsAppTestbed (TlsAppTestbed):
         cmd_str = "sudo docker exec -d {} echo '/rundir/cores/core.%t.%e.%p' | tee /proc/sys/kernel/core_pattern".format(pod_name)
         os.system (cmd_str)
 
-        cmd_str = "sudo docker exec -d {} cp -f /rundir/lib/librpc_server.so /usr/local/lib/".format(pod_name)
+        cmd_str = "sudo docker exec -d {} cp -f /rundir/bin/librpc_server.so /usr/local/lib/".format(pod_name)
         os.system (cmd_str)
 
-        cmd_str = "sudo docker exec -d {} cp -f /rundir/lib/libev_sock.so /usr/local/lib/".format(pod_name)
+        cmd_str = "sudo docker exec -d {} cp -f /rundir/bin/libev_sock.so /usr/local/lib/".format(pod_name)
         os.system (cmd_str)
 
         cmd_str = "sudo docker exec -d {} cp -f /rundir/bin/tlspack.exe /usr/local/bin".format(pod_name)
@@ -337,7 +337,8 @@ class TlsCsAppTestbed (TlsAppTestbed):
 
 class TlsApp(object):
     def __init__(self):
-        self.pod_rundir_certs = os.path.join(POD_RUNDIR, 'certs')
+        self.pod_certs_dir = os.path.join(POD_RUNDIR, 'certs')
+        self.pod_lib_dir = os.path.join(POD_RUNDIR, 'bin')
 
         self.tcpdump = TCPDUMP_FLAG
         self.next_ipaddr = next_ipaddr
@@ -496,29 +497,8 @@ class TlsApp(object):
 
 class TlsCsApp(TlsApp):
     def __init__ (self):
-
         super().__init__()
-
         self.app_testbed_type = 'TlsCsApp'
-
-        self.max_active = 1
-        self.max_pipeline = 1
-        self.tcp_snd_buff = 0
-        self.tcp_rcv_buff = 0
-        self.app_snd_buff = 0
-        self.app_rcv_buff = 0
-        self.app_next_write = 0
-        self.app_cs_starttls_len = 0
-        self.app_sc_starttls_len = 0
-        self.app_cs_data_len = 1
-        self.app_sc_data_len = 1
-        self.total_conn_count = 1
-        self.close_type = 'fin'
-        self.close_notify = 'no_send'
-        self.session_resumption = 0
-        self.emulation_id = 0
-        self.client_port_begin = 5000
-        self.client_port_end = 65000
 
     def start_run (self, config_j):
 
