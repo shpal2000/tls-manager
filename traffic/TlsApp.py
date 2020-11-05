@@ -362,7 +362,9 @@ class TlsApp(object):
         app_module = importlib.import_module ('.'+app_name, package=package)
         app_class = getattr(app_module, app_name)
         app = app_class ()
-        app.start (testbed, runid, **app_kwargs)
+        config_j = app.get_config (testbed, **app_kwargs)
+        # update config_j using UI
+        app.start_run (runid, config_j)
         return app  
 
     @staticmethod
@@ -424,15 +426,7 @@ class TlsApp(object):
         return list (running_app_list)
 
 
-    def init_run(self, testbed, runid):
-
-        # runid info
-        _runI = TlsAppRun(runid)
-
-        self.pod_pcap_dir = os.path.join(POD_RUNDIR
-                                    , 'traffic'
-                                    , runid
-                                    , 'pcaps')
+    def set_testbed(self, testbed):
 
         # testbed info
         testbed_class_name = self.app_testbed_type + 'Testbed'
@@ -444,22 +438,10 @@ class TlsApp(object):
             raise TlsAppError(-1
             , 'error: incompatible testbed type {}'.format (_testbedI.type))
 
-        # testbed availability
-        if _testbedI.busy:
-            raise TlsAppError(-1
-            , 'error: testbed {} in use; running {}'.format \
-            (_testbedI.testbed, _testbedI.runid))
-
-        # testbed readiness
-        if not _testbedI.ready:
-            _testbedI.start()
-            time.sleep (30)
-
-        self.runI = _runI
         self.testbedI = _testbedI
 
 
-    def set_traffic_dir (self, config_j):
+    def set_traffic_config (self, config_j):
 
         node_cfg_dir = os.path.join(NODE_RUNDIR, 'traffic', self.runI.runid)
 
@@ -500,12 +482,25 @@ class TlsCsApp(TlsApp):
         super().__init__()
         self.app_testbed_type = 'TlsCsApp'
 
-    def start_run (self, config_j):
+    def start_run (self, runid, config_j):
 
-        pod_cfg_file = self.set_traffic_dir (config_j)
+        # runid info
+        self.runI = TlsAppRun(runid)
+
+        # testbed availability
+        if self.testbedI.busy:
+            raise TlsAppError(-1
+            , 'error: testbed {} in use; running {}'.format \
+            (self.testbedI.testbed, self.testbedI.runid))
+
+        # testbed readiness
+        if not self.testbedI.ready:
+            self.testbedI.start()
+            time.sleep (30)
+
+        pod_cfg_file = self.set_traffic_config (config_j)
 
         testbed_info = self.testbedI.get_info()
-
         # start the server
         server_pod_ips = []
         pod_start_threads = []

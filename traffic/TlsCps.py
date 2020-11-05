@@ -34,9 +34,8 @@ class TlsCps(TlsCsApp):
         self.resumption_count = 10
         self.session_cache = "server"
 
-    def start(self
+    def get_config (self
                 , testbed
-                , runid
                 , cps
                 , cipher
                 , version
@@ -46,7 +45,7 @@ class TlsCps(TlsCsApp):
                 , session_cache
                 , total_conn_count):
         
-        self.init_run(testbed, runid)
+        self.set_testbed(testbed)
 
         self.cps = cps / self.testbedI.traffic_path_count
         if  self.cps == 0:
@@ -122,8 +121,7 @@ class TlsCps(TlsCsApp):
                             "ifconfig {{PARAMS.testbedI.pod_iface}} hw ether {{PARAMS.testbedI.traffic_paths[traffic_path_index]['client']['gw_mac']}}",
                             "ip route add default dev {{PARAMS.testbedI.pod_iface}} table 200",
                             "ip -4 route add local {{PARAMS.testbedI.traffic_paths[traffic_path_index]['client']['subnets'][0]}} dev lo",
-                            "ip rule add from {{PARAMS.testbedI.traffic_paths[traffic_path_index]['client']['subnets'][0]}} table 200",
-                            "tcpdump -i {{PARAMS.testbedI.pod_iface}} {{PARAMS.tcpdump}} -w {{PARAMS.pod_pcap_dir.rstrip('/')}}/traffic_path_{{traffic_path_index+1}}_client.pcap &"
+                            "ip rule add from {{PARAMS.testbedI.traffic_paths[traffic_path_index]['client']['subnets'][0]}} table 200"
                         ]
                     }
                     ,
@@ -175,8 +173,7 @@ class TlsCps(TlsCsApp):
                             "ifconfig {{PARAMS.testbedI.pod_iface}} hw ether {{PARAMS.testbedI.traffic_paths[traffic_path_index]['server']['gw_mac']}}",
                             "ip route add default dev {{PARAMS.testbedI.pod_iface}} table 200",
                             "ip -4 route add local {{PARAMS.testbedI.traffic_paths[traffic_path_index]['server']['subnets'][0]}} dev lo",
-                            "ip rule add from {{PARAMS.testbedI.traffic_paths[traffic_path_index]['server']['subnets'][0]}} table 200",
-                            "tcpdump -i {{PARAMS.testbedI.pod_iface}} {{PARAMS.tcpdump}} -w {{PARAMS.pod_pcap_dir.rstrip('/')}}/traffic_path_{{traffic_path_index}}_server.pcap &"
+                            "ip rule add from {{PARAMS.testbedI.traffic_paths[traffic_path_index]['server']['subnets'][0]}} table 200"
                         ]
                     }
                     {{ "," if not loop.last }}
@@ -189,6 +186,5 @@ class TlsCps(TlsCsApp):
 
         config_j = json.loads(config_s)
 
-        self.start_run (config_j)
-
+        return config_j
 
