@@ -25,6 +25,14 @@ class TlsCfg:
     DB_CSTRING = 'localhost:27017'
     NODE_RUNDIR = '/root/rundir'
 
+
+def nodecmd(cmd_str):
+    return subprocess.check_output('ssh -i /ssh_rsa_id -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null localhost "' + \
+                                    cmd_str + '"', shell=True, close_fds=True).decode("utf-8").strip()
+
+def localcmd(cmd_str):
+    return subprocess.check_output(cmd_str, shell=True, close_fds=True).decode("utf-8").strip()
+
 def get_pod_name (testbed, pod_index):
     return "{}-pod-{}".format (testbed, pod_index+1)
 
@@ -34,7 +42,7 @@ def get_exe_alias (testbed, pod_index, runid):
 def get_pod_ip (testbed, pod_index):
     pod_name = get_pod_name (testbed, pod_index)
     cmd_str = "docker inspect --format='{{.NetworkSettings.IPAddress}}' " + pod_name
-    return subprocess.check_output(cmd_str, shell=True, close_fds=True).decode("utf-8").strip()
+    return nodecmd(cmd_str)
 
 def start_run_thread(testbed
                         , pod_index
@@ -90,7 +98,7 @@ def start_run_stats (runid
     if client_pod_ips:
         pod_ips += ' --client_pod_ips ' + ':'.join(client_pod_ips)
 
-    os.system('python3 -m traffic_node.tgen.TlsApp --runid {} {} & echo $! > {}'. \
+    nodecmd('python3 -m traffic_node.tgen.TlsApp --runid {} {} & echo $! > {}'. \
                                 format (runid, pod_ips, stats_pid_file))
 
     stats_pid = 0
@@ -264,42 +272,42 @@ class TlsCsAppTestbed (TlsAppTestbed):
             node_iface = traffic_path['server']['iface']
 
         cmd_str = "sudo docker run --cap-add=SYS_PTRACE --security-opt seccomp=unconfined --network=bridge --privileged --name {} -it -d {} {} tlspack/tgen:latest /bin/bash".format (pod_name, rundir_map, srcdir_map)
-        os.system (cmd_str)
+        nodecmd (cmd_str)
 
         pod_ip = get_pod_ip (self.testbed, pod_index)
 
         cmd_str = "sudo ip link set dev {} up".format(node_iface)
-        os.system (cmd_str)
+        nodecmd (cmd_str)
 
         node_macvlan = testbed_info[node_iface]['macvlan']
         cmd_str = "sudo docker network connect {} {}".format(node_macvlan, pod_name)
-        os.system (cmd_str)
+        nodecmd (cmd_str)
 
         cmd_str = "sudo docker exec -d {} echo '/rundir/cores/core.%t.%e.%p' | tee /proc/sys/kernel/core_pattern".format(pod_name)
-        os.system (cmd_str)
+        nodecmd (cmd_str)
         
         if self.is_dev:
 
             cmd_str = "sudo docker exec -d {} cp -f /rundir/bin/librpc_server.so /usr/local/lib/".format(pod_name)
-            os.system (cmd_str)
+            nodecmd (cmd_str)
 
             cmd_str = "sudo docker exec -d {} cp -f /rundir/bin/libev_sock.so /usr/local/lib/".format(pod_name)
-            os.system (cmd_str)
+            nodecmd (cmd_str)
 
             cmd_str = "sudo docker exec -d {} cp -f /rundir/bin/tlspack.exe /usr/local/bin".format(pod_name)
-            os.system (cmd_str)
+            nodecmd (cmd_str)
 
             cmd_str = "sudo docker exec -d {} chmod +x /usr/local/bin/tlspack.exe".format(pod_name)
-            os.system (cmd_str)
+            nodecmd (cmd_str)
 
             cmd_str = "sudo docker exec -d {} cp -f /rundir/bin/rpc_proxy_main.py /usr/local/bin".format(pod_name)
-            os.system (cmd_str)
+            nodecmd (cmd_str)
 
             cmd_str = "sudo docker exec -d {} chmod +x /usr/local/bin/rpc_proxy_main.py".format(pod_name)
-            os.system (cmd_str)
+            nodecmd (cmd_str)
 
         cmd_str = "sudo docker exec -d {} python3 /usr/local/bin/rpc_proxy_main.py {} {}".format(pod_name, pod_ip, RPC_PORT)
-        os.system (cmd_str)
+        nodecmd (cmd_str)
 
 
     def start(self):
@@ -322,7 +330,7 @@ class TlsCsAppTestbed (TlsAppTestbed):
     def stop_pod(self, pod_index):
         pod_name = get_pod_name (self.testbed, pod_index)
         cmd_str = "sudo docker rm -f {}".format (pod_name)
-        os.system (cmd_str)
+        nodecmd (cmd_str)
 
 
     def stop(self):
@@ -364,15 +372,16 @@ class TlsApp(object):
         self.testbedI = None
         self.app_testbed_type = None
 
+
     @staticmethod
     def restart(node_rundir):
         TlsCfg.NODE_RUNDIR = node_rundir
 
-        os.system ("docker ps -a | grep '[t]lsjet_' | awk '{print $1}' | xargs docker rm -f")
-        os.system ("ps aux | grep '[T]lsApp' | awk '{print $2}' | xargs kill -9")
+        nodecmd ("docker ps -a | grep '[t]lsjet_' | awk '{print $1}' | xargs docker rm -f")
+        nodecmd ("ps aux | grep '[T]lsApp' | awk '{print $2}' | xargs kill -9")
 
-        os.system("systemctl stop mongodb")
-        os.system("systemctl start mongodb")
+        # localcmd("mongod --shutdown --dbpath /rundir/db")
+        localcmd("mongod --noauth --dbpath /rundir/db &")
 
         time.sleep(1)
 
@@ -501,10 +510,10 @@ class TlsApp(object):
 
         node_cfg_dir = os.path.join(TlsCfg.NODE_RUNDIR, 'traffic', self.runI.runid)
 
-        os.system ( 'rm -rf {}'.format(node_cfg_dir) )
-        os.system ( 'mkdir -p {}'.format(node_cfg_dir) )
-        os.system ( 'mkdir -p {}'.format(os.path.join(node_cfg_dir, 'pcaps')) )
-        os.system ( 'mkdir -p {}'.format(os.path.join(node_cfg_dir, 'logs')) )
+        nodecmd ( 'rm -rf {}'.format(node_cfg_dir) )
+        nodecmd ( 'mkdir -p {}'.format(node_cfg_dir) )
+        nodecmd ( 'mkdir -p {}'.format(os.path.join(node_cfg_dir, 'pcaps')) )
+        nodecmd ( 'mkdir -p {}'.format(os.path.join(node_cfg_dir, 'logs')) )
 
         node_cfg_file = os.path.join(node_cfg_dir, 'config.json')
         config_s = json.dumps(config_j, indent=2)
