@@ -26,23 +26,32 @@ class TlsCfg:
     NODE_RUNDIR = '/root/rundir'
 
 
-def nodecmd(cmd_str):
-    return subprocess.check_output('ssh -i /ssh_rsa_id -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null localhost "' + \
-                                    cmd_str + '"', shell=True, close_fds=True).decode("utf-8").strip()
+def nodecmd(_cmd_str, check_ouput=False):
+    ssh_cmd = "ssh -i /ssh_rsa_id -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null localhost"
+    cmd_str = ssh_cmd + ' ' + '"{}"'.format (_cmd_str)
+    if check_ouput:
+        return subprocess.check_output(cmd_str, shell=True, close_fds=True).decode("utf-8").strip()
+    else:
+        os.system(cmd_str)
+        return None
 
-def localcmd(cmd_str):
-    return subprocess.check_output(cmd_str, shell=True, close_fds=True).decode("utf-8").strip()
+def localcmd(cmd_str, check_ouput=False):
+    if check_ouput:
+        return subprocess.check_output(cmd_str, shell=True, close_fds=True).decode("utf-8").strip()
+    else:
+        os.system(cmd_str)
+        return None
 
 def get_pod_name (testbed, pod_index):
-    return "{}-pod-{}".format (testbed, pod_index+1)
+    return "tlsjet_{}_pod_{}".format (testbed, pod_index+1)
 
 def get_exe_alias (testbed, pod_index, runid):
-    return "{}-{}.exe".format (get_pod_name (testbed, pod_index), runid)
+    return "{}_{}.exe".format (get_pod_name (testbed, pod_index), runid)
 
 def get_pod_ip (testbed, pod_index):
     pod_name = get_pod_name (testbed, pod_index)
-    cmd_str = "docker inspect --format='{{.NetworkSettings.IPAddress}}' " + pod_name
-    return nodecmd(cmd_str)
+    cmd_str = "sudo docker inspect --format='{{.NetworkSettings.IPAddress}}' " + pod_name
+    return nodecmd(cmd_str, check_ouput=True)
 
 def start_run_thread(testbed
                         , pod_index
@@ -88,7 +97,7 @@ def start_run_stats (runid
                         , proxy_pod_ips=[]
                         , client_pod_ips=[]):
 
-    stats_pid_file = os.path.join(TlsCfg.NODE_RUNDIR, 'traffic', runid, 'stats_pid.txt')
+    stats_pid_file = os.path.join(POD_RUNDIR, 'traffic', runid, 'stats_pid.txt')
 
     pod_ips = ''
     if server_pod_ips:
@@ -98,7 +107,7 @@ def start_run_stats (runid
     if client_pod_ips:
         pod_ips += ' --client_pod_ips ' + ':'.join(client_pod_ips)
 
-    nodecmd('python3 -m traffic_node.tgen.TlsApp --runid {} {} & echo $! > {}'. \
+    localcmd('python3 -m traffic_node.tgen.TlsApp --runid {} {} & echo $! > {}'. \
                                 format (runid, pod_ips, stats_pid_file))
 
     stats_pid = 0
@@ -271,7 +280,7 @@ class TlsCsAppTestbed (TlsAppTestbed):
         else:
             node_iface = traffic_path['server']['iface']
 
-        cmd_str = "sudo docker run --cap-add=SYS_PTRACE --security-opt seccomp=unconfined --network=bridge --privileged --name {} -it -d {} {} tlspack/tgen:latest /bin/bash".format (pod_name, rundir_map, srcdir_map)
+        cmd_str = "sudo docker run --cap-add=SYS_PTRACE --security-opt seccomp=unconfined --network=bridge --privileged --name {} -it -d {} {} tlsjet:latest /bin/bash".format (pod_name, rundir_map, srcdir_map)
         nodecmd (cmd_str)
 
         pod_ip = get_pod_ip (self.testbed, pod_index)
@@ -377,10 +386,11 @@ class TlsApp(object):
     def restart(node_rundir):
         TlsCfg.NODE_RUNDIR = node_rundir
 
-        nodecmd ("docker ps -a | grep '[t]lsjet_' | awk '{print $1}' | xargs docker rm -f")
-        nodecmd ("ps aux | grep '[T]lsApp' | awk '{print $2}' | xargs kill -9")
+        nodecmd ("sudo docker ps -a | grep '[t]lsjet_' | awk '{print $1}' | xargs sudo docker rm -f")
 
+        # nodecmd ("ps aux | grep '[T]lsApp' | awk '{print $2}' | xargs kill -9")
         # localcmd("mongod --shutdown --dbpath /rundir/db")
+        
         localcmd("mongod --noauth --dbpath /rundir/db &")
 
         time.sleep(1)
@@ -394,9 +404,9 @@ class TlsApp(object):
         testbed_table = db[TESTBED_TABLE]
         testbed_table.remove ({})
 
-        with open ('/arena-0.json') as f:
+        with open ('/rundir/arena-0.json') as f:
             testbed0 = json.load(f)
-            testbed_table.add (testbed0)
+            testbed_table.insert (testbed0)
 
 
 
@@ -508,12 +518,12 @@ class TlsApp(object):
 
     def set_traffic_config (self, config_j):
 
-        node_cfg_dir = os.path.join(TlsCfg.NODE_RUNDIR, 'traffic', self.runI.runid)
+        node_cfg_dir = os.path.join(POD_RUNDIR, 'traffic', self.runI.runid)
 
-        nodecmd ( 'rm -rf {}'.format(node_cfg_dir) )
-        nodecmd ( 'mkdir -p {}'.format(node_cfg_dir) )
-        nodecmd ( 'mkdir -p {}'.format(os.path.join(node_cfg_dir, 'pcaps')) )
-        nodecmd ( 'mkdir -p {}'.format(os.path.join(node_cfg_dir, 'logs')) )
+        localcmd( 'rm -rf {}'.format(node_cfg_dir) )
+        localcmd( 'mkdir -p {}'.format(node_cfg_dir) )
+        localcmd( 'mkdir -p {}'.format(os.path.join(node_cfg_dir, 'pcaps')) )
+        localcmd( 'mkdir -p {}'.format(os.path.join(node_cfg_dir, 'logs')) )
 
         node_cfg_file = os.path.join(node_cfg_dir, 'config.json')
         config_s = json.dumps(config_j, indent=2)
